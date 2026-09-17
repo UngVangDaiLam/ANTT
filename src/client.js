@@ -131,6 +131,55 @@ class SecureNoteClient {
     this._session = null;
   }
 
+  /**
+   * Doi mat khau. CHI can boc lai Vault Key va cac private key bang Master
+   * Key moi - KHONG dung den bat ky note nao, du co hang nghin note (day
+   * chinh la loi ich cua key wrapping 2 lop da thiet ke trong vault.js).
+   *
+   * Yeu cau nhap lai mat khau CU (khong chi dua vao session hien tai) de
+   * phong truong hop tab/trinh duyet dang dang nhap bi ai do muon loi dung,
+   * ho van phai biet mat khau that moi doi duoc.
+   */
+  async changePassword(oldPassword, newPassword) {
+    await ready();
+    const session = this._requireSession();
+
+    // Xac thuc lai bang mat khau CU truoc - goi login() de server tu xac
+    // nhan dung mat khau, nem loi ngay neu sai (khong doi gi ca trong TH nay)
+    const oldSaltB64 = await this.transport.getSalt(session.email);
+    const oldSalt = sodium.from_base64(oldSaltB64);
+    const { authKey: oldAuthKey } = await kdf.deriveKeysFromPassword(oldPassword, oldSalt);
+    await this.transport.login({ email: session.email, authKeyB64: sodium.to_base64(oldAuthKey) });
+
+    // Sinh salt + Master Key MOI tu mat khau moi
+    const newSalt = kdf.generateSalt();
+    const { authKey: newAuthKey, masterKey: newMasterKey } = await kdf.deriveKeysFromPassword(
+      newPassword,
+      newSalt
+    );
+
+    // Boc lai Vault Key va 2 private key (ECDH + ky) bang Master Key MOI -
+    // Vault Key, private key, va toan bo note KHONG THAY DOI, chi lop boc
+    // ngoai cung doi thoi
+    const wrappedVaultKey = await vault.wrapVaultKey(session.vaultKey, newMasterKey);
+    const wrappedPrivateKey = await sharing.wrapPrivateKey(session.privateKey, newMasterKey);
+    const wrappedSigningPrivateKey = await sharing.wrapPrivateKey(session.signingPrivateKey, newMasterKey);
+
+    await this.transport.changePassword({
+      email: session.email,
+      saltB64: sodium.to_base64(newSalt),
+      authKeyB64: sodium.to_base64(newAuthKey),
+      wrappedVaultKey,
+      wrappedPrivateKey,
+      wrappedSigningPrivateKey,
+    });
+
+    // Cap nhat lai session dang mo voi Master Key moi (khong can dang nhap lai)
+    session.masterKey = newMasterKey;
+
+    return { email: session.email };
+  }
+
   /** Tao note moi, tra ve { noteId } */
   async createNote(text) {
     await ready();

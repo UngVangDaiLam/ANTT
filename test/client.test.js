@@ -111,4 +111,59 @@ describe('SecureNoteClient (client SDK cap cao - thu nhu C se dung)', () => {
     const client = new SecureNoteClient(transport);
     await expect(client.createNote('abc')).rejects.toThrow('Chua dang nhap');
   });
+
+  test('doi mat khau thanh cong - dang nhap lai bang mat khau moi van doc duoc note cu', async () => {
+    const transport = createMemoryTransport();
+    const alice = new SecureNoteClient(transport);
+    await alice.register('alice8@example.com', 'mat-khau-cu');
+    const { noteId } = await alice.createNote('Ghi chu truoc khi doi mat khau');
+
+    await alice.changePassword('mat-khau-cu', 'mat-khau-moi');
+
+    alice.logout();
+    const alice2 = new SecureNoteClient(transport);
+    await alice2.login('alice8@example.com', 'mat-khau-moi');
+    const text = await alice2.readNote(noteId);
+    expect(text).toBe('Ghi chu truoc khi doi mat khau');
+  });
+
+  test('doi mat khau xong - mat khau cu khong con dung nua', async () => {
+    const transport = createMemoryTransport();
+    const alice = new SecureNoteClient(transport);
+    await alice.register('alice9@example.com', 'mat-khau-cu');
+    await alice.changePassword('mat-khau-cu', 'mat-khau-moi');
+    alice.logout();
+
+    const attacker = new SecureNoteClient(transport);
+    await expect(attacker.login('alice9@example.com', 'mat-khau-cu')).rejects.toThrow();
+  });
+
+  test('doi mat khau voi sai mat khau cu -> tu choi, khong doi gi ca', async () => {
+    const transport = createMemoryTransport();
+    const alice = new SecureNoteClient(transport);
+    await alice.register('alice10@example.com', 'mat-khau-dung');
+
+    await expect(alice.changePassword('mat-khau-sai', 'mat-khau-moi')).rejects.toThrow();
+
+    // Mat khau cu van con dung vi doi that bai
+    alice.logout();
+    const alice2 = new SecureNoteClient(transport);
+    await alice2.login('alice10@example.com', 'mat-khau-dung');
+    expect(alice2.isLoggedIn()).toBe(true);
+  });
+
+  test('chia se van hoat dong binh thuong sau khi doi mat khau (private key duoc wrap lai dung)', async () => {
+    const transport = createMemoryTransport();
+    const alice = new SecureNoteClient(transport);
+    const bob = new SecureNoteClient(transport);
+    await alice.register('alice11@example.com', 'mat-khau-cu');
+    await bob.register('bob11@example.com', 'mk-bob');
+
+    const { noteId } = await alice.createNote('Note se duoc chia se sau khi doi mat khau');
+    await alice.changePassword('mat-khau-cu', 'mat-khau-moi');
+
+    const { shareId } = await alice.shareNote(noteId, 'bob11@example.com');
+    const text = await bob.readSharedNote(shareId);
+    expect(text).toBe('Note se duoc chia se sau khi doi mat khau');
+  });
 });

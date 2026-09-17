@@ -53,6 +53,19 @@ function createMemoryTransport() {
       return { ...user };
     },
 
+    async changePassword({ email, saltB64, authKeyB64, wrappedVaultKey, wrappedPrivateKey, wrappedSigningPrivateKey }) {
+      const user = users.get(email);
+      if (!user) throw new Error('Khong tim thay tai khoan');
+      // GHI CHU CHO B: server THAT phai kiem tra session/cookie hien tai dung
+      // la cua chinh email nay truoc khi cho doi mat khau - khong duoc tin
+      // tuong mu quang truong email client gui len.
+      user.saltB64 = saltB64;
+      user.authKeyB64 = authKeyB64;
+      user.wrappedVaultKey = wrappedVaultKey;
+      user.wrappedPrivateKey = wrappedPrivateKey;
+      user.wrappedSigningPrivateKey = wrappedSigningPrivateKey;
+    },
+
     async getUserKeys(email) {
       const user = users.get(email);
       if (!user) throw new Error('Khong tim thay tai khoan');
