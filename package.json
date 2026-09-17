@@ -1,0 +1,16 @@
+{
+  "name": "secure-note-crypto",
+  "version": "0.1.0",
+  "description": "Module crypto cho do an Secure Note E2EE (Argon2id + XChaCha20-Poly1305 + X25519) - phu trach boi thanh vien A",
+  "main": "src/index.js",
+  "scripts": {
+    "test": "jest",
+    "benchmark": "node benchmark/argon2-benchmark.js"
+  },
+  "dependencies": {
+    "libsodium-wrappers-sumo": "^0.7.16"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
+  }
+}
