@@ -18,11 +18,15 @@
  * cac gia tri nay ra localStorage/sessionStorage.
  */
 
-import sodium from 'libsodium-wrappers-sumo';
-import { kdf, vault, note, sharing } from '@secure-note/crypto';
+import { getSodium, kdf, vault, note, sharing } from '@secure-notes/crypto';
+
+// client-sdk KHONG tu import libsodium-wrappers-sumo: moi thao tac ma hoa di
+// qua @secure-notes/crypto (dung export getSodium() co san) de chi mot cho
+// duy nhat trong repo cham vao thu vien libsodium.
+let sodium;
 
 async function ready() {
-  await sodium.ready;
+  sodium = await getSodium();
 }
 
 /**
@@ -43,7 +47,9 @@ export class SecureNoteClient {
    */
   constructor(transport) {
     if (!transport) {
-      throw new Error('SecureNoteClient can 1 transport (vi du memoryTransport hoac fetch toi API that)');
+      throw new Error(
+        'SecureNoteClient can 1 transport (vi du memoryTransport hoac fetch toi API that)',
+      );
     }
     this.transport = transport;
     /** @type {SecureNoteSession | null} */
@@ -91,7 +97,10 @@ export class SecureNoteClient {
     const wrappedPrivateKey = await sharing.wrapPrivateKey(keyPair.privateKey, masterKey);
 
     const signingKeyPair = await sharing.generateSigningKeyPair();
-    const wrappedSigningPrivateKey = await sharing.wrapPrivateKey(signingKeyPair.privateKey, masterKey);
+    const wrappedSigningPrivateKey = await sharing.wrapPrivateKey(
+      signingKeyPair.privateKey,
+      masterKey,
+    );
 
     await this.transport.register({
       email: normalizedEmail,
@@ -132,11 +141,17 @@ export class SecureNoteClient {
     const salt = sodium.from_base64(saltB64);
     const { authKey, masterKey } = await kdf.deriveKeysFromPassword(password, salt);
 
-    const record = await this.transport.login({ email: normalizedEmail, authKeyB64: sodium.to_base64(authKey) });
+    const record = await this.transport.login({
+      email: normalizedEmail,
+      authKeyB64: sodium.to_base64(authKey),
+    });
 
     const vaultKey = await vault.unwrapVaultKey(record.wrappedVaultKey, masterKey);
     const privateKey = await sharing.unwrapPrivateKey(record.wrappedPrivateKey, masterKey);
-    const signingPrivateKey = await sharing.unwrapPrivateKey(record.wrappedSigningPrivateKey, masterKey);
+    const signingPrivateKey = await sharing.unwrapPrivateKey(
+      record.wrappedSigningPrivateKey,
+      masterKey,
+    );
 
     this._session = {
       email: normalizedEmail,
@@ -191,12 +206,15 @@ export class SecureNoteClient {
     const newSalt = kdf.generateSalt();
     const { authKey: newAuthKey, masterKey: newMasterKey } = await kdf.deriveKeysFromPassword(
       newPassword,
-      newSalt
+      newSalt,
     );
 
     const wrappedVaultKey = await vault.wrapVaultKey(session.vaultKey, newMasterKey);
     const wrappedPrivateKey = await sharing.wrapPrivateKey(session.privateKey, newMasterKey);
-    const wrappedSigningPrivateKey = await sharing.wrapPrivateKey(session.signingPrivateKey, newMasterKey);
+    const wrappedSigningPrivateKey = await sharing.wrapPrivateKey(
+      session.signingPrivateKey,
+      newMasterKey,
+    );
 
     await this.transport.changePassword({
       email: session.email,
@@ -253,7 +271,9 @@ export class SecureNoteClient {
 
     const record = await this.transport.getNote(noteId);
     if (record.ownerEmail !== session.email) {
-      throw new Error('Ban khong phai chu note nay - dung readSharedNote() cho note duoc chia se toi ban');
+      throw new Error(
+        'Ban khong phai chu note nay - dung readSharedNote() cho note duoc chia se toi ban',
+      );
     }
 
     const noteKey = await vault.unwrapVaultKey(record.wrappedNoteKeyForOwner, session.vaultKey);
@@ -283,7 +303,11 @@ export class SecureNoteClient {
     const recipientKeys = await this.transport.getUserKeys(normalizedRecipient);
     const recipientPublicKey = sodium.from_base64(recipientKeys.publicKeyB64);
 
-    const wrapped = await sharing.wrapNoteKeyForRecipient(noteKey, recipientPublicKey, session.signingPrivateKey);
+    const wrapped = await sharing.wrapNoteKeyForRecipient(
+      noteKey,
+      recipientPublicKey,
+      session.signingPrivateKey,
+    );
 
     const { shareId } = await this.transport.shareNote({
       noteId,
@@ -325,7 +349,7 @@ export class SecureNoteClient {
         signature: share.signature,
       },
       session.privateKey,
-      senderSigningPublicKey
+      senderSigningPublicKey,
     );
 
     return note.decryptNote({ nonce: share.noteNonce, ciphertext: share.noteCiphertext }, noteKey);
@@ -346,7 +370,9 @@ export class SecureNoteClient {
     return {
       email: normalizedEmail,
       encryptionKeyFingerprint: sharing.publicKeyFingerprint(sodium.from_base64(keys.publicKeyB64)),
-      signingKeyFingerprint: sharing.publicKeyFingerprint(sodium.from_base64(keys.signingPublicKeyB64)),
+      signingKeyFingerprint: sharing.publicKeyFingerprint(
+        sodium.from_base64(keys.signingPublicKeyB64),
+      ),
     };
   }
 }

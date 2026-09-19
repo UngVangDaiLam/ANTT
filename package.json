@@ -1,5 +1,27 @@
 {
-  "name": "secure-note-monorepo",
+  "name": "secure-notes",
   "private": true,
-  "version": "0.0.0"
+  "type": "module",
+  "description": "Ứng dụng web ghi chú mã hóa đầu cuối dựa trên mật mã lai X25519 – XChaCha20-Poly1305",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "packageManager": "pnpm@10.34.5",
+  "scripts": {
+    "test": "pnpm -r --if-present test",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "depcheck": "depcruise shared crypto client-sdk server web --config .dependency-cruiser.cjs",
+    "check": "pnpm lint && pnpm format:check && pnpm depcheck && pnpm test",
+    "dev:server": "pnpm --filter @secure-notes/server dev",
+    "dev:web": "pnpm --filter @secure-notes/web dev"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "dependency-cruiser": "^18.3.1",
+    "eslint": "^10.11.0",
+    "globals": "^17.12.0",
+    "prettier": "^3.9.8"
+  }
 }

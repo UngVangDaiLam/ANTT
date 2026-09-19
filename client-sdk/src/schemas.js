@@ -20,7 +20,7 @@ export const WrappedKeySchema = Type.Object(
     nonce: Type.String(),
     ciphertext: Type.String(),
   },
-  { additionalProperties: false }
+  { additionalProperties: false },
 );
 
 export const RegisterResponseSchema = Type.Object({}, { additionalProperties: true });
@@ -29,7 +29,7 @@ export const GetSaltResponseSchema = Type.Object(
   {
     saltB64: Type.String(),
   },
-  { additionalProperties: true }
+  { additionalProperties: true },
 );
 
 export const LoginResponseSchema = Type.Object(
@@ -41,7 +41,7 @@ export const LoginResponseSchema = Type.Object(
     signingPublicKeyB64: Type.String(),
     wrappedSigningPrivateKey: WrappedKeySchema,
   },
-  { additionalProperties: true }
+  { additionalProperties: true },
 );
 
 export const UserKeysResponseSchema = Type.Object(
@@ -49,14 +49,14 @@ export const UserKeysResponseSchema = Type.Object(
     publicKeyB64: Type.String(),
     signingPublicKeyB64: Type.String(),
   },
-  { additionalProperties: true }
+  { additionalProperties: true },
 );
 
 export const CreateNoteResponseSchema = Type.Object(
   {
     noteId: Type.String(),
   },
-  { additionalProperties: true }
+  { additionalProperties: true },
 );
 
 export const NoteListItemSchema = Type.Object(
@@ -64,7 +64,7 @@ export const NoteListItemSchema = Type.Object(
     noteId: Type.String(),
     createdAt: Type.Union([Type.Number(), Type.String()]),
   },
-  { additionalProperties: true }
+  { additionalProperties: true },
 );
 export const NoteListResponseSchema = Type.Array(NoteListItemSchema);
 
@@ -76,14 +76,14 @@ export const NoteRecordSchema = Type.Object(
     ciphertext: Type.String(),
     wrappedNoteKeyForOwner: WrappedKeySchema,
   },
-  { additionalProperties: true }
+  { additionalProperties: true },
 );
 
 export const ShareResponseSchema = Type.Object(
   {
     shareId: Type.String(),
   },
-  { additionalProperties: true }
+  { additionalProperties: true },
 );
 
 export const SharedWithMeItemSchema = Type.Object(
@@ -93,7 +93,7 @@ export const SharedWithMeItemSchema = Type.Object(
     senderEmail: Type.String(),
     createdAt: Type.Union([Type.Number(), Type.String()]),
   },
-  { additionalProperties: true }
+  { additionalProperties: true },
 );
 export const SharedWithMeResponseSchema = Type.Array(SharedWithMeItemSchema);
 
@@ -110,5 +110,5 @@ export const ShareRecordSchema = Type.Object(
     noteNonce: Type.String(),
     noteCiphertext: Type.String(),
   },
-  { additionalProperties: true }
+  { additionalProperties: true },
 );

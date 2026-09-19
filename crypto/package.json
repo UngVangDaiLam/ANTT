@@ -1,20 +1,21 @@
 {
-  "name": "@secure-note/crypto",
+  "name": "@secure-notes/crypto",
   "version": "0.1.0",
-  "description": "Module mat ma thuan cho do an Secure Note E2EE (Argon2id + XChaCha20-Poly1305 + X25519 + Ed25519) - phu trach boi Lam. Khong goi mang.",
+  "private": true,
   "type": "module",
-  "main": "./src/index.js",
+  "description": "[Lâm] Module mật mã thuần: không gọi mạng, không biết server tồn tại.",
   "exports": {
     ".": "./src/index.js"
   },
   "scripts": {
     "test": "vitest run",
-    "test:watch": "vitest"
+    "benchmark": "node benchmark/argon2-benchmark.js"
   },
   "dependencies": {
+    "@secure-notes/shared": "workspace:*",
     "libsodium-wrappers-sumo": "^0.8.4"
   },
   "devDependencies": {
-    "vitest": "^2.1.0"
+    "vitest": "^5.0.1"
   }
 }

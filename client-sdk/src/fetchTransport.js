@@ -84,7 +84,12 @@ export function createFetchTransport(baseUrl) {
     },
 
     async createNote({ ownerEmail, nonce, ciphertext, wrappedNoteKeyForOwner }) {
-      const data = await callApi('POST', '/notes', { ownerEmail, nonce, ciphertext, wrappedNoteKeyForOwner });
+      const data = await callApi('POST', '/notes', {
+        ownerEmail,
+        nonce,
+        ciphertext,
+        wrappedNoteKeyForOwner,
+      });
       return assertSchema(CreateNoteResponseSchema, data, 'POST /notes');
     },
 

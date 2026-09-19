@@ -1,5 +1,16 @@
 packages:
-  - "crypto"
-  - "client-sdk"
-allowBuilds:
-  esbuild: set this to true or false
+  - shared
+  - crypto
+  - client-sdk
+  - server
+  - web
+
+# pnpm 10 chặn script cài đặt theo mặc định; Prisma cần chạy script để tải engine.
+onlyBuiltDependencies:
+  - '@prisma/client'
+  - '@prisma/engines'
+  - prisma
+
+# Vá lỗ hổng GHSA-ggr8-5vv4-36mx trong deepmerge-ts (phụ thuộc gián tiếp của Prisma).
+overrides:
+  deepmerge-ts: '>=8.0.0'

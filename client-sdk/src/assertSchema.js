@@ -23,6 +23,6 @@ export function assertSchema(schema, value, contextLabel) {
   const detail = firstError ? `${firstError.path}: ${firstError.message}` : 'khong ro chi tiet';
   throw new Error(
     `Phan hoi tu server khong dung dinh dang mong doi (${contextLabel}) - ${detail}. ` +
-      'Day co the la dau hieu server bi loi hoac bi can thiep, tu choi xu ly tiep de an toan.'
+      'Day co the la dau hieu server bi loi hoac bi can thiep, tu choi xu ly tiep de an toan.',
   );
 }

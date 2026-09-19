@@ -33,7 +33,9 @@ describe('sharing (hybrid X25519 + XChaCha20-Poly1305 + ky so Ed25519)', () => {
     const noteKey = sodium.randombytes_buf(32);
 
     const wrapped = await wrapNoteKeyForRecipient(noteKey, bob.publicKey, alice.privateKey);
-    await expect(unwrapNoteKeyFromSender(wrapped, eve.privateKey, alice.publicKey)).rejects.toBeTruthy();
+    await expect(
+      unwrapNoteKeyFromSender(wrapped, eve.privateKey, alice.publicKey),
+    ).rejects.toBeTruthy();
   });
 
   test('sai public key ky (khong phai cua A that) -> B phai tu choi, khong giai ma', async () => {
@@ -44,7 +46,7 @@ describe('sharing (hybrid X25519 + XChaCha20-Poly1305 + ky so Ed25519)', () => {
 
     const wrapped = await wrapNoteKeyForRecipient(noteKey, bob.publicKey, alice.privateKey);
     await expect(
-      unwrapNoteKeyFromSender(wrapped, bob.privateKey, mallory.publicKey)
+      unwrapNoteKeyFromSender(wrapped, bob.privateKey, mallory.publicKey),
     ).rejects.toThrow('Chu ky khong hop le');
   });
 
@@ -57,7 +59,7 @@ describe('sharing (hybrid X25519 + XChaCha20-Poly1305 + ky so Ed25519)', () => {
     const tampered = { ...wrapped, ciphertext: wrapped.ciphertext.slice(0, -4) + 'AAAA' };
 
     await expect(
-      unwrapNoteKeyFromSender(tampered, bob.privateKey, alice.publicKey)
+      unwrapNoteKeyFromSender(tampered, bob.privateKey, alice.publicKey),
     ).rejects.toThrow('Chu ky khong hop le');
   });
 

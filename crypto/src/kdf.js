@@ -57,7 +57,7 @@ export async function deriveRootKey(password, saltBytes, kdfParams = {}) {
     saltBytes,
     opslimit,
     memlimit,
-    sodium.crypto_pwhash_ALG_ARGON2ID13
+    sodium.crypto_pwhash_ALG_ARGON2ID13,
   );
   sodium.memzero(passwordBytes);
   return rootKey;

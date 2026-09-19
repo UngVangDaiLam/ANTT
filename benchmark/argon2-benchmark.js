@@ -12,14 +12,7 @@ async function bench(memMB, opslimit) {
   const memlimit = memMB * 1024 * 1024;
 
   const start = Date.now();
-  sodium.crypto_pwhash(
-    32,
-    password,
-    salt,
-    opslimit,
-    memlimit,
-    sodium.crypto_pwhash_ALG_ARGON2ID13
-  );
+  sodium.crypto_pwhash(32, password, salt, opslimit, memlimit, sodium.crypto_pwhash_ALG_ARGON2ID13);
   const elapsed = Date.now() - start;
   console.log(`memlimit=${memMB}MB\topslimit=${opslimit}\t-> ${elapsed} ms`);
 }

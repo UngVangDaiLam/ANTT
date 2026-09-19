@@ -54,7 +54,14 @@ export function createMemoryTransport() {
       return { ...user };
     },
 
-    async changePassword({ email, saltB64, authKeyB64, wrappedVaultKey, wrappedPrivateKey, wrappedSigningPrivateKey }) {
+    async changePassword({
+      email,
+      saltB64,
+      authKeyB64,
+      wrappedVaultKey,
+      wrappedPrivateKey,
+      wrappedSigningPrivateKey,
+    }) {
       const user = users.get(email);
       if (!user) throw new Error('Khong tim thay tai khoan');
       // GHI CHU CHO BACKEND: server THAT phai kiem tra session/cookie hien tai
@@ -102,7 +109,15 @@ export function createMemoryTransport() {
       return { ...record };
     },
 
-    async shareNote({ noteId, senderEmail, recipientEmail, ephemeralPublicKey, nonce, ciphertext, signature }) {
+    async shareNote({
+      noteId,
+      senderEmail,
+      recipientEmail,
+      ephemeralPublicKey,
+      nonce,
+      ciphertext,
+      signature,
+    }) {
       const noteRecord = notes.get(noteId);
       if (!noteRecord) throw new Error('Khong tim thay note');
       if (noteRecord.ownerEmail !== senderEmail) {
@@ -131,7 +146,12 @@ export function createMemoryTransport() {
     async listSharedWithMe(recipientEmail) {
       return [...shares.values()]
         .filter((s) => s.recipientEmail === recipientEmail)
-        .map((s) => ({ shareId: s.shareId, noteId: s.noteId, senderEmail: s.senderEmail, createdAt: s.createdAt }));
+        .map((s) => ({
+          shareId: s.shareId,
+          noteId: s.noteId,
+          senderEmail: s.senderEmail,
+          createdAt: s.createdAt,
+        }));
     },
 
     async getShare(shareId) {

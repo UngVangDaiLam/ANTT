@@ -44,7 +44,7 @@ export async function wrapVaultKey(vaultKey, masterKey) {
     null, // khong co additional data
     null, // (khong dung secret nonce cua libsodium)
     nonce,
-    masterKey
+    masterKey,
   );
   return {
     nonce: sodium.to_base64(nonce),
@@ -65,5 +65,11 @@ export async function unwrapVaultKey(wrapped, masterKey) {
   await ready();
   const nonce = sodium.from_base64(wrapped.nonce);
   const ciphertext = sodium.from_base64(wrapped.ciphertext);
-  return sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(null, ciphertext, null, nonce, masterKey);
+  return sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(
+    null,
+    ciphertext,
+    null,
+    nonce,
+    masterKey,
+  );
 }

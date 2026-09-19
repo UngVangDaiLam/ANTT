@@ -51,6 +51,8 @@ describe('kdf', () => {
       opslimit: 4,
       memlimit: 128 * 1024 * 1024,
     });
-    expect(sodium.to_base64(keysDefault.masterKey)).not.toBe(sodium.to_base64(keysCustom.masterKey));
+    expect(sodium.to_base64(keysDefault.masterKey)).not.toBe(
+      sodium.to_base64(keysCustom.masterKey),
+    );
   });
 });

@@ -37,7 +37,7 @@ export async function encryptNote(plaintext, key) {
     null,
     null,
     nonce,
-    key
+    key,
   );
   return {
     nonce: sodium.to_base64(nonce),
@@ -62,7 +62,7 @@ export async function decryptNote(encryptedNote, key) {
     ciphertext,
     null,
     nonce,
-    key
+    key,
   );
   return sodium.to_string(plaintextBytes);
 }
