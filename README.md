@@ -1,63 +1,73 @@
-# secure-note-crypto — Module crypto (thành viên A)
+# Secure Notes
 
-Đây là khung code khởi điểm cho module `crypto/` của đồ án Secure Note E2EE, đã cài đặt, chạy test và benchmark thành công. Đọc file này trước khi bắt đầu.
+Ứng dụng web ghi chú mã hóa đầu cuối dựa trên mật mã lai X25519 – XChaCha20-Poly1305.
 
-## Cài đặt
-
-```bash
-npm install
-npm test          # chạy 16 unit test, phải PASS hết
-npm run benchmark # đo thời gian Argon2id với các memory cost khác nhau
-```
-
-## LƯU Ý QUAN TRỌNG — đã xác nhận bằng thực nghiệm
-
-Bản `libsodium-wrappers` **thường** (không phải sumo) **không có** `crypto_pwhash` (Argon2id) — gọi sẽ báo lỗi `TypeError: length cannot be null or undefined` vì các hằng số như `crypto_pwhash_SALTBYTES` bị `undefined`. Toàn bộ code trong repo này dùng `libsodium-wrappers-sumo`. Khi tích hợp vào `client/` (React + Vite), nhớ cài đúng gói:
-
-```bash
-npm install libsodium-wrappers-sumo
-```
-
-và import giống hệt cách dùng trong Node: `import sodium from 'libsodium-wrappers-sumo'; await sodium.ready;` trước khi gọi bất kỳ hàm nào. Gói này chạy được cả trên browser (qua bundler như Vite) lẫn Node — đúng như đề xuất gốc đã kỳ vọng ("một thư viện, một API").
+Giả định xuyên suốt: **máy chủ không tin cậy**. Mọi mã hóa và giải mã diễn ra ở trình duyệt;
+server chỉ là kho lưu trữ mù.
 
 ## Cấu trúc
 
+| Thư mục       | Người phụ trách | Vai trò                                                         |
+| ------------- | --------------- | --------------------------------------------------------------- |
+| `shared/`     | Lâm + Trần Bảo  | Schema API (TypeBox), hằng số cấu hình, mã lỗi. Không có mật mã |
+| `crypto/`     | Lâm             | Module mật mã thuần, không gọi mạng                             |
+| `client-sdk/` | Lâm             | Cầu nối: gọi `crypto/` và API, trả kết quả đơn giản cho web     |
+| `server/`     | Trần Bảo        | Fastify + PostgreSQL, kho lưu trữ mù                            |
+| `web/`        | Phan Bảo        | React + Vite, chỉ gọi `client-sdk/`                             |
+| `docs/`       | Cả nhóm         | API, quyết định thiết kế, threat model, bảng ASVS               |
+| `deploy/`     | Trần Bảo        | Docker Compose, Caddy                                           |
+
+## Ranh giới bắt buộc
+
+Kiểm tra tự động bằng `pnpm depcheck` (dependency-cruiser), CI sẽ báo lỗi nếu vi phạm:
+
+- `server/` không import `crypto/`, `client-sdk/` hay libsodium.
+- `web/` chỉ import `client-sdk/`.
+- `crypto/` không biết gì về mạng, server hay giao diện.
+- `shared/` không phụ thuộc gói nào khác của dự án.
+
+## Bắt đầu
+
+Yêu cầu: Node.js 24 LTS (tối thiểu 22.13), pnpm 10, Docker (để chạy PostgreSQL).
+
+```bash
+corepack enable            # bật pnpm đúng phiên bản ghi trong package.json
+pnpm install
+pnpm check                 # lint + format + ranh giới kiến trúc + test
+pnpm --filter @secure-notes/server db:validate   # kiểm tra schema Prisma
+
+# Chạy server
+docker compose -f deploy/docker-compose.yml up -d
+cp server/.env.example server/.env
+pnpm dev:server            # http://127.0.0.1:3000/api/health
+
+# Chạy giao diện (cửa sổ khác)
+pnpm dev:web               # http://localhost:5173, /api tự chuyển về server
 ```
-src/
-  kdf.js      Bước 1: password -> Argon2id -> root key -> tách authKey/masterKey (crypto_kdf)
-  vault.js    Bước 2: sinh Vault Key, bọc/mở bằng masterKey (key wrapping 2 lớp)
-  note.js     Bước 3: mã hóa/giải mã nội dung note bằng Vault Key
-  sharing.js  Bước 4: chia sẻ hybrid X25519 (ECDH) + XChaCha20-Poly1305 (kiểu ECIES)
-  index.js    gom export cả 4 module
 
-test/         unit test cho từng module, gồm test "tamper ciphertext -> phải fail"
-benchmark/    đo thời gian Argon2id theo memory cost (dùng cho báo cáo tuần 8)
-```
+## Quy ước làm việc
 
-## Luồng dữ liệu tổng thể (đọc theo đúng thứ tự sẽ code)
+- **Toàn bộ repo dùng JavaScript + ESM** (`import`/`export`), không TypeScript. Thêm JSDoc cho các hàm quan trọng.
+- **GitHub là nguồn sự thật duy nhất.** Cái gì chưa push lên thì coi như chưa có.
+- Chỉ 3 người nên commit thẳng lên `main`, không bắt buộc nhánh riêng/Pull Request. Đổi lại: chạy
+  `pnpm check` xanh ở máy mình rồi mới push; thay đổi đụng đến ranh giới bảo mật (session, quyền
+  truy cập, schema, mã hóa) thì báo nhóm trước khi push để người khác liếc qua.
+- Tên nhánh (khi cần tách việc dở dang): `feat/...`, `fix/...`, `chore/...`, `docs/...`.
+- Commit: `feat: ...`, `fix: ...`, `test: ...`, `docs: ...`, `chore: ...`, `refactor: ...`.
+- Chạy `pnpm format` và `pnpm check` trước khi commit/push.
+- Hằng số (tham số Argon2, giới hạn kích thước, thời gian phiên...) chỉ đặt trong `shared/src/config.js`.
+- Đổi API thì cập nhật `docs/API.md` và schema trong `shared/` cùng lúc.
+- Script trong `package.json` phải chạy được trên cả Windows lẫn Linux (không dùng cú pháp riêng của bash).
 
-1. **Đăng ký tài khoản**: `kdf.generateSalt()` → `kdf.deriveKeysFromPassword(password, salt)` ra `{authKey, masterKey}`. Gửi `authKey` lên server (server hash thêm 1 lớp trước khi lưu — việc của thành viên B). `masterKey` giữ lại ở client.
-2. Sinh `vault.generateVaultKey()`, rồi `vault.wrapVaultKey(vaultKey, masterKey)` → gửi phần đã bọc lên server lưu kèm tài khoản.
-3. Sinh cặp khóa chia sẻ: `sharing.generateKeyPair()` → bọc private key bằng `sharing.wrapPrivateKey(privateKey, masterKey)` → gửi `publicKey` (để lộ, dùng cho chia sẻ) và private key đã bọc lên server.
-4. **Đăng nhập**: dẫn lại `{authKey, masterKey}` từ password + salt đã lưu → gửi authKey xác thực → nếu đúng, dùng masterKey để `vault.unwrapVaultKey(...)` lấy lại Vault Key, và `sharing.unwrapPrivateKey(...)` lấy lại private key chia sẻ.
-5. **Lưu note**: `note.encryptNote(text, vaultKey)` → gửi `{nonce, ciphertext}` lên server.
-6. **Đọc note**: tải `{nonce, ciphertext}` về → `note.decryptNote(...)` bằng Vault Key.
-7. **Chia sẻ note cho B**: lấy `publicKey` của B (từ server) → `sharing.wrapNoteKeyForRecipient(vaultKeyOrNoteKey, B.publicKey)` → gửi kết quả lên server. B tải về, dùng `sharing.unwrapNoteKeyFromSender(wrapped, B.privateKey)` để lấy lại khóa và giải mã note.
+## Chuyển code của Lâm vào repo này
 
-## Việc cần làm tiếp (không có trong bản khởi điểm này)
-
-- Viết thêm test benchmark trên máy yếu thật (không chỉ giả lập) và trên mobile browser.
-- Cân nhắc thêm cơ chế hiển thị fingerprint public key khi chia sẻ (đối chiếu thủ công, chống server tráo khóa) — xem ghi chú trong `sharing.js`.
-- Tích hợp vào React: gọi các hàm này trong context/state quản lý phiên đăng nhập, KHÔNG lưu `masterKey`/`vaultKey`/private key vào `localStorage`.
-- Khi viết báo cáo, trích trực tiếp các đoạn comment giải thích "vì sao" trong từng file — đó chính là nội dung mục "ăn điểm" (thiết kế khóa, quản lý nonce, giới hạn của thiết kế).
-
-## Số liệu benchmark đã đo thử (môi trường phát triển hiện tại, chỉ để tham khảo)
-
-| Memory cost | Thời gian |
-|---|---|
-| 16 MB | 63 ms |
-| 32 MB | 100 ms |
-| 64 MB | 208 ms |
-| 128 MB | 418 ms |
-
-Nhớ đo lại trên máy thật của nhóm và trên mobile — số liệu sẽ khác, và đó chính là số liệu cần đưa vào báo cáo.
+1. Chép `src/kdf.js`, `vault.js`, `note.js`, `sharing.js` vào `crypto/src/`; test tương ứng vào `crypto/test/`; benchmark vào
+   `crypto/benchmark/` (**còn thiếu**: `argon2-benchmark.js` vẫn ở thư mục gốc `benchmark/`, chưa chuyển
+   vào `crypto/benchmark/` — script `benchmark` trong `crypto/package.json` sẽ lỗi cho đến khi chuyển).
+2. Chép `src/client.js`, `fetchTransport.js`, `memoryTransport.js` vào `client-sdk/src/`; `client.test.js` vào `client-sdk/test/`.
+3. Đổi `require(...)` thành `import`, `module.exports` thành `export`. Trong test, đổi import của Jest sang `import { describe, test, expect } from 'vitest'`.
+4. Dùng `libsodium-wrappers-sumo` bản 0.8.x đã khai báo sẵn trong `crypto/package.json` (bản 0.7.x lỗi khi import ESM, xem D32).
+5. Export lại trong `crypto/src/index.js` và `client-sdk/src/index.js` (có hướng dẫn sẵn trong file).
+6. `client-sdk` import crypto bằng `import { ... } from '@secure-notes/crypto'`, không dùng đường dẫn tương đối sang thư mục khác.
+7. Chạy `pnpm check` cho đến khi qua hết rồi commit. Các thay đổi đã chốt trong `docs/DECISIONS.md` làm ở commit sau, để
+   commit này chỉ là chuyển code.
