@@ -1,0 +1,27 @@
+# Dùng khi deploy (tuần 7). Giao diện và API cùng một domain:
+#   /api/*  -> Fastify
+#   còn lại -> file tĩnh đã build của web/
+# Thay :8080 bằng tên miền thật để Caddy tự cấp HTTPS.
+
+:8080 {
+	handle /api/* {
+		reverse_proxy server:3000
+	}
+
+	handle {
+		root * /srv/web
+		try_files {path} /index.html
+		file_server
+	}
+
+	header {
+		# 'wasm-unsafe-eval' BẮT BUỘC vì libsodium chạy bằng WebAssembly.
+		# Không có 'unsafe-inline', không có 'unsafe-eval'.
+		Content-Security-Policy "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		# Bật khi đã có HTTPS thật:
+		# Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+}
