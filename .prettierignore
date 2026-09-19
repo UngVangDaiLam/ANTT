@@ -2,3 +2,5 @@ node_modules
 dist
 coverage
 pnpm-lock.yaml
+# Cấu hình cục bộ của Claude Code, không phải code của repo (đã git-ignore ở mức global).
+.claude
