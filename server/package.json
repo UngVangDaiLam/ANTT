@@ -1,0 +1,29 @@
+{
+  "name": "@secure-notes/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "[Trần Bảo] Kho lưu trữ mù: chỉ lưu và trung chuyển dữ liệu đã mã hóa.",
+  "scripts": {
+    "dev": "node --watch --env-file-if-exists=.env --disable-proto=throw src/server.js",
+    "start": "node --env-file-if-exists=.env --disable-proto=throw src/server.js",
+    "test": "vitest run",
+    "db:validate": "prisma validate",
+    "db:migrate": "prisma migrate dev",
+    "db:generate": "prisma generate"
+  },
+  "dependencies": {
+    "@fastify/cookie": "^11.1.2",
+    "@fastify/helmet": "^13.1.1",
+    "@fastify/rate-limit": "^11.2.0",
+    "@fastify/swagger": "^9.8.1",
+    "@prisma/client": "^6.19.3",
+    "@secure-notes/shared": "workspace:*",
+    "fastify": "^5.12.5",
+    "fastify-plugin": "^6.0.0"
+  },
+  "devDependencies": {
+    "prisma": "^6.19.3",
+    "vitest": "^5.0.1"
+  }
+}

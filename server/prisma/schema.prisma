@@ -1,0 +1,98 @@
+// [Trần Bảo] Server chỉ lưu dữ liệu đã mã hóa, salt, hash và khóa công khai.
+// Mọi trường Json dạng { nonce, ciphertext } đều là dữ liệu client đã mã hóa sẵn.
+// Nhị phân lưu dạng chuỗi base64url không padding, trừ hash do server tự tính.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                       String @id @default(uuid()) @db.Uuid
+  email                    String @unique // đã chuẩn hóa: trim + chữ thường
+  salt                     String
+  kdfOpslimit              Int
+  kdfMemlimit              Int
+  authKeyHash              Bytes // SHA-256(authKey), KHÔNG lưu authKey gốc
+  wrappedVaultKey          Json // { nonce, ciphertext }
+  x25519PublicKey          String
+  ed25519PublicKey         String
+  wrappedX25519PrivateKey  Json // { nonce, ciphertext }
+  wrappedEd25519PrivateKey Json // { nonce, ciphertext }
+
+  // Mục 11 (recovery key) - làm sau nhóm A, có thể cắt
+  recoveryAuthKeyHash       Bytes?
+  wrappedVaultKeyByRecovery Json?
+
+  createdAt DateTime @default(now())
+
+  notes          Note[]
+  sharesSent     Share[]        @relation("sender")
+  sharesReceived Share[]        @relation("recipient")
+  sessions       Session[]
+  loginHistory   LoginHistory[]
+}
+
+model Note {
+  id               String   @id @db.Uuid // DO CLIENT SINH (UUID v4), vì noteId nằm trong AD
+  ownerId          String   @db.Uuid
+  version          Int // bắt đầu 1, chỉ nhận ghi khi = version hiện tại + 1
+  encryptedTitle   Json // { nonce, ciphertext }
+  encryptedContent Json // { nonce, ciphertext }
+  wrappedNoteKey   Json // khóa note bọc bằng Vault Key của chủ note
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  owner  User    @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  shares Share[]
+
+  @@index([ownerId])
+}
+
+model Share {
+  id           String   @id @default(uuid()) @db.Uuid
+  noteId       String   @db.Uuid // chia sẻ THEO THAM CHIẾU, không sao chép ciphertext
+  senderId     String   @db.Uuid
+  recipientId  String   @db.Uuid
+  sharePackage Json // { ephemeralPublicKey, nonce, ciphertext, signature }, chữ ký gồm noteId
+  createdAt    DateTime @default(now())
+
+  note      Note @relation(fields: [noteId], references: [id], onDelete: Cascade)
+  sender    User @relation("sender", fields: [senderId], references: [id], onDelete: Cascade)
+  recipient User @relation("recipient", fields: [recipientId], references: [id], onDelete: Cascade)
+
+  @@unique([noteId, recipientId])
+  @@index([recipientId])
+}
+
+model Session {
+  id         String   @id // SHA-256 của session token; cookie giữ token gốc
+  userId     String   @db.Uuid
+  createdAt  DateTime @default(now())
+  expiresAt  DateTime
+  lastSeenAt DateTime @default(now())
+  userAgent  String?
+  ip         String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model LoginHistory {
+  id             String   @id @default(uuid()) @db.Uuid
+  userId         String?  @db.Uuid // null nếu email không tồn tại
+  emailAttempted String
+  success        Boolean
+  ip             String?
+  userAgent      String?
+  createdAt      DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+}
