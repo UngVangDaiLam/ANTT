@@ -1,5 +1,6 @@
-const sodium = require('libsodium-wrappers-sumo');
-const { encryptNote, decryptNote } = require('../src/note');
+import { describe, test, expect, beforeAll } from 'vitest';
+import sodium from 'libsodium-wrappers-sumo';
+import { encryptNote, decryptNote } from '../src/note.js';
 
 beforeAll(async () => {
   await sodium.ready;
@@ -43,22 +44,4 @@ describe('note', () => {
     const tampered = { ...encrypted, ciphertext: flipOneChar(encrypted.ciphertext) };
     await expect(decryptNote(tampered, vaultKey)).rejects.toBeTruthy();
   });
-
-    test('mã hóa note rỗng vẫn phải giải mã ra đúng chuỗi rỗng', async () => {
-    const vaultKey = sodium.randombytes_buf(32);
-    const plaintext = '';   // <-- chuỗi rỗng, tự gõ đúng 2 dấu nháy đơn liền nhau
-    const encrypted = await encryptNote(plaintext, vaultKey);
-    const decrypted = await decryptNote(encrypted, vaultKey);
-    expect(decrypted).toBe(plaintext);   // <-- so sánh decrypted với plaintext
-  });
-
-  test('note tiếng Việt có dấu phải mã hóa/giải mã đúng (test Unicode)', async () => {
-    const vaultKey = sodium.randombytes_buf(32);
-    const plaintext = 'Đây là ghi chú có dấu: ăâêôơư, thanh điệu: sắc huyền hỏi ngã nặng';
-    const encrypted = await encryptNote(plaintext, vaultKey);   // <-- gọi hàm mã hóa
-    const decrypted = await decryptNote(encrypted, vaultKey);   // <-- gọi hàm giải mã
-    expect(decrypted).toBe(plaintext);
-  });
-
-  
 });

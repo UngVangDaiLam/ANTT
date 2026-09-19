@@ -1,7 +1,8 @@
-const { SecureNoteClient } = require('../src/client');
-const { createMemoryTransport } = require('../src/memoryTransport');
+import { describe, test, expect } from 'vitest';
+import { SecureNoteClient } from '../src/client.js';
+import { createMemoryTransport } from '../src/memoryTransport.js';
 
-describe('SecureNoteClient (client SDK cap cao - thu nhu C se dung)', () => {
+describe('SecureNoteClient (client SDK cap cao - thu nhu giao dien web se dung)', () => {
   test('dang ky, tao note, tu doc lai note cua chinh minh', async () => {
     const transport = createMemoryTransport();
     const alice = new SecureNoteClient(transport);
@@ -21,7 +22,6 @@ describe('SecureNoteClient (client SDK cap cao - thu nhu C se dung)', () => {
     alice1.logout();
     expect(alice1.isLoggedIn()).toBe(false);
 
-    // Mo mot "phien" moi hoan toan (nhu mo lai trinh duyet), dang nhap lai
     const alice2 = new SecureNoteClient(transport);
     await alice2.login('alice2@example.com', 'mat-khau-cua-alice');
     const text = await alice2.readNote(noteId);
@@ -65,12 +65,10 @@ describe('SecureNoteClient (client SDK cap cao - thu nhu C se dung)', () => {
     await bob.register('bob5@example.com', 'mk-bob');
 
     const noteBiMat = await alice.createNote('TUYET MAT - khong chia se');
-    await alice.createNote('Note cong khai hon'); // note khac, khong dung den trong test nay
+    await alice.createNote('Note cong khai hon');
 
-    // Bob khong phai chu note nay -> readNote phai tu choi
     await expect(bob.readNote(noteBiMat.noteId)).rejects.toThrow('Ban khong phai chu note nay');
 
-    // Va Bob cung khong thay note nay trong danh sach duoc chia se toi minh
     const sharedList = await bob.listSharedWithMe();
     expect(sharedList.length).toBe(0);
   });
@@ -88,7 +86,6 @@ describe('SecureNoteClient (client SDK cap cao - thu nhu C se dung)', () => {
     const { noteId } = await alice.createNote('Chi danh cho Bob');
     const { shareId } = await alice.shareNote(noteId, 'bob6@example.com');
 
-    // Eve co the biet shareId (vi du doan ID) nhung khong co private key cua Bob
     await expect(eve.readSharedNote(shareId)).rejects.toBeTruthy();
   });
 
@@ -100,7 +97,7 @@ describe('SecureNoteClient (client SDK cap cao - thu nhu C se dung)', () => {
     await bob.register('bob7@example.com', 'mk-bob');
 
     const fp1 = await alice.getFingerprint('bob7@example.com');
-    const fp2 = await bob.getFingerprint('bob7@example.com'); // Bob tu tra fingerprint cua chinh minh
+    const fp2 = await bob.getFingerprint('bob7@example.com');
 
     expect(fp1.encryptionKeyFingerprint).toBe(fp2.encryptionKeyFingerprint);
     expect(fp1.signingKeyFingerprint).toBe(fp2.signingKeyFingerprint);
@@ -145,7 +142,6 @@ describe('SecureNoteClient (client SDK cap cao - thu nhu C se dung)', () => {
 
     await expect(alice.changePassword('mat-khau-sai', 'mat-khau-moi')).rejects.toThrow();
 
-    // Mat khau cu van con dung vi doi that bai
     alice.logout();
     const alice2 = new SecureNoteClient(transport);
     await alice2.login('alice10@example.com', 'mat-khau-dung');
@@ -165,5 +161,28 @@ describe('SecureNoteClient (client SDK cap cao - thu nhu C se dung)', () => {
     const { shareId } = await alice.shareNote(noteId, 'bob11@example.com');
     const text = await bob.readSharedNote(shareId);
     expect(text).toBe('Note se duoc chia se sau khi doi mat khau');
+  });
+
+  test('email khong phan biet hoa/thuong va khoang trang (chuan hoa truoc khi gui)', async () => {
+    const transport = createMemoryTransport();
+    const alice = new SecureNoteClient(transport);
+    await alice.register('  Alice12@Example.com  ', 'mat-khau-cua-alice');
+    expect(alice.currentUserEmail()).toBe('alice12@example.com');
+    alice.logout();
+
+    const alice2 = new SecureNoteClient(transport);
+    await alice2.login('ALICE12@EXAMPLE.COM', 'mat-khau-cua-alice');
+    expect(alice2.isLoggedIn()).toBe(true);
+  });
+
+  test('logout() xoa khoa khoi bo nho (memzero) - khoa cu tro thanh toan so 0', async () => {
+    const transport = createMemoryTransport();
+    const alice = new SecureNoteClient(transport);
+    await alice.register('alice13@example.com', 'mat-khau-cua-alice');
+    const masterKeyRef = alice._session.masterKey;
+    expect(masterKeyRef.some((byte) => byte !== 0)).toBe(true);
+
+    alice.logout();
+    expect(masterKeyRef.every((byte) => byte === 0)).toBe(true);
   });
 });

@@ -1,5 +1,6 @@
-const sodium = require('libsodium-wrappers-sumo');
-const { generateVaultKey, wrapVaultKey, unwrapVaultKey } = require('../src/vault');
+import { describe, test, expect, beforeAll } from 'vitest';
+import sodium from 'libsodium-wrappers-sumo';
+import { generateVaultKey, wrapVaultKey, unwrapVaultKey } from '../src/vault.js';
 
 beforeAll(async () => {
   await sodium.ready;
@@ -38,7 +39,6 @@ describe('vault (key wrapping 2 lop)', () => {
   });
 
   test('doi mat khau = chi can wrap lai vault key, khong dung den note nao', async () => {
-    // Mo phong "doi mat khau": co masterKey moi, wrap lai chinh vault key cu
     const oldMasterKey = sodium.randombytes_buf(32);
     const newMasterKey = sodium.randombytes_buf(32);
     const vaultKey = generateVaultKey();

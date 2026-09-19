@@ -1,0 +1,22 @@
+{
+  "name": "@secure-note/client-sdk",
+  "version": "0.1.0",
+  "description": "Lop client SDK cap cao cho do an Secure Note E2EE - phu trach boi Lam. Giao dien web (Phan Bao) chi import package nay.",
+  "type": "module",
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@secure-note/crypto": "workspace:*",
+    "@sinclair/typebox": "^0.34.0",
+    "libsodium-wrappers-sumo": "^0.8.4"
+  },
+  "devDependencies": {
+    "vitest": "^2.1.0"
+  }
+}

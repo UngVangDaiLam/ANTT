@@ -1,5 +1,6 @@
-const sodium = require('libsodium-wrappers-sumo');
-const {
+import { describe, test, expect, beforeAll } from 'vitest';
+import sodium from 'libsodium-wrappers-sumo';
+import {
   generateKeyPair,
   generateSigningKeyPair,
   wrapPrivateKey,
@@ -7,7 +8,7 @@ const {
   wrapNoteKeyForRecipient,
   unwrapNoteKeyFromSender,
   publicKeyFingerprint,
-} = require('../src/sharing');
+} from '../src/sharing.js';
 
 beforeAll(async () => {
   await sodium.ready;
@@ -42,7 +43,6 @@ describe('sharing (hybrid X25519 + XChaCha20-Poly1305 + ky so Ed25519)', () => {
     const noteKey = sodium.randombytes_buf(32);
 
     const wrapped = await wrapNoteKeyForRecipient(noteKey, bob.publicKey, alice.privateKey);
-    // B tuong nham public key ky cua Mallory la cua Alice -> phai bi tu choi
     await expect(
       unwrapNoteKeyFromSender(wrapped, bob.privateKey, mallory.publicKey)
     ).rejects.toThrow('Chu ky khong hop le');

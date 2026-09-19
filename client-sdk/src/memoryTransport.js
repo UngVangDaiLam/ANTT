@@ -2,22 +2,23 @@
  * memoryTransport.js
  * ------------------
  * "Server gia" chay trong bo nho (khong luu gi xuong dia, mat het khi tat
- * chuong trinh) - dung de A tu phat trien va test client SDK (client.js) MA
- * KHONG CAN cho B xay xong backend that.
+ * chuong trinh) - dung de Lam tu phat trien va test client SDK (client.js) MA
+ * KHONG CAN cho backend that xong.
  *
- * Day chinh la "hop dong API" (API contract) ma B se phai cai dat lai bang
- * Express + database that: cung ten ham, cung tham so vao/ra. Khi B xong
- * backend that, chi can thay transport nay bang mot transport khac goi
- * fetch() toi API that, client.js KHONG CAN SUA GI CA.
+ * Day chinh la "hop dong API" (API contract) ma backend that phai cai dat lai:
+ * cung ten ham, cung tham so vao/ra. Khi backend that xong, chi can thay
+ * transport nay bang fetchTransport.js, client.js KHONG CAN SUA GI CA.
  *
- * QUAN TRONG: day KHONG PHAI backend that, chi la mo phong de test. Khong
- * co ma hoa mat khau phia server (xem ghi chu trong login()), khong co
- * rate-limit, khong luu ben vung - nhung viec do la trach nhiem cua B khi
- * lam backend that.
+ * QUAN TRONG: day KHONG PHAI backend that, chi la mo phong de test. Khong co
+ * ma hoa mat khau phia server (xem ghi chu trong login()), khong co rate-limit,
+ * khong luu ben vung - nhung viec do la trach nhiem cua backend that.
  */
 
-function createMemoryTransport() {
-  const users = new Map(); // email -> ho so tai khoan (chi chua du lieu da duoc A ma hoa san)
+/**
+ * @returns {import('./transportType.js').Transport}
+ */
+export function createMemoryTransport() {
+  const users = new Map(); // email -> ho so tai khoan (chi chua du lieu da duoc ma hoa san)
   const notes = new Map(); // noteId -> ho so note (chi chua ciphertext)
   const shares = new Map(); // shareId -> ho so goi chia se
 
@@ -44,10 +45,10 @@ function createMemoryTransport() {
       // gop chung 1 thong bao de tranh do email dang ky (user enumeration).
       if (!user) throw new Error('Sai email hoac mat khau');
 
-      // GHI CHU CHO B: server THAT phai hash authKeyB64 them 1 lop (bcrypt/
-      // Argon2id, salt rieng cua server) roi moi so sanh voi gia tri da hash
-      // luu trong DB - KHONG so sanh truc tiep chuoi nhu o day. Ban mo phong
-      // nay so sanh truc tiep chi de don gian hoa viec test SDK.
+      // GHI CHU CHO BACKEND: server THAT phai hash authKeyB64 them 1 lop
+      // (bcrypt/Argon2id, salt rieng cua server) roi moi so sanh voi gia tri
+      // da hash luu trong DB - KHONG so sanh truc tiep chuoi nhu o day. Ban mo
+      // phong nay so sanh truc tiep chi de don gian hoa viec test SDK.
       if (user.authKeyB64 !== authKeyB64) throw new Error('Sai email hoac mat khau');
 
       return { ...user };
@@ -56,9 +57,9 @@ function createMemoryTransport() {
     async changePassword({ email, saltB64, authKeyB64, wrappedVaultKey, wrappedPrivateKey, wrappedSigningPrivateKey }) {
       const user = users.get(email);
       if (!user) throw new Error('Khong tim thay tai khoan');
-      // GHI CHU CHO B: server THAT phai kiem tra session/cookie hien tai dung
-      // la cua chinh email nay truoc khi cho doi mat khau - khong duoc tin
-      // tuong mu quang truong email client gui len.
+      // GHI CHU CHO BACKEND: server THAT phai kiem tra session/cookie hien tai
+      // dung la cua chinh email nay truoc khi cho doi mat khau - khong duoc
+      // tin tuong mu quang truong email client gui len.
       user.saltB64 = saltB64;
       user.authKeyB64 = authKeyB64;
       user.wrappedVaultKey = wrappedVaultKey;
@@ -140,5 +141,3 @@ function createMemoryTransport() {
     },
   };
 }
-
-module.exports = { createMemoryTransport };

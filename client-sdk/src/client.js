@@ -1,41 +1,52 @@
 /**
- * client.js
- * ---------
- * Lop "client SDK" cap cao - day la lop C (frontend) se goi truc tiep.
- * C KHONG BAO GIO tu goi kdf/vault/note/sharing hay tu cam vao khai niem
- * Master Key/Vault Key/private key - C chi goi cac ham o day, truyen vao/
- * nhan ve du lieu thuong (chuoi, object thuong).
+ * client.js (package @secure-note/client-sdk)
+ * ---------------------------------------------
+ * Lop "client SDK" cap cao - day la lop giao dien web (Phan Bao) se goi truc
+ * tiep. Giao dien KHONG BAO GIO tu goi @secure-note/crypto hay tu cam vao
+ * khai niem Master Key/Vault Key/private key - chi goi cac ham public o day,
+ * truyen vao/nhan ve du lieu thuong (chuoi, object thuong).
  *
  * SecureNoteClient nhan vao 1 "transport" - bat ky object nao co du cac ham
- * async: register, getSalt, login, getUserKeys, createNote, listNotes,
- * getNote, shareNote, listSharedWithMe, getShare. Hom nay dung
- * memoryTransport.js (server gia trong bo nho) de tu phat trien/test doc
- * lap voi B. Sau nay B xong backend that, chi can doi transport thanh 1
- * object goi fetch() toi API that - KHONG SUA GI trong file nay ca.
+ * async trong Transport (xem transportType.js). Dung memoryTransport.js (server
+ * gia trong bo nho) de tu phat trien/test doc lap voi backend. Khi backend that
+ * xong, chi can doi transport thanh createFetchTransport(...) - KHONG SUA GI
+ * trong file nay ca.
  *
  * Trang thai dang nhap (masterKey, vaultKey, private key...) chi luu trong
  * thuoc tinh rieng cua instance (this._session) - nghia la CHI TON TAI TRONG
- * BO NHO cua tab trinh duyet dang mo, mat khi refresh trang. KHONG BAO GIO
- * ghi cac gia tri nay ra localStorage/sessionStorage - dung nguyen tac da
- * ghi trong README.
+ * BO NHO cua tab trinh duyet dang mo, mat khi refresh trang. KHONG BAO GIO ghi
+ * cac gia tri nay ra localStorage/sessionStorage.
  */
 
-const sodium = require('libsodium-wrappers-sumo');
-const kdf = require('./kdf');
-const vault = require('./vault');
-const note = require('./note');
-const sharing = require('./sharing');
+import sodium from 'libsodium-wrappers-sumo';
+import { kdf, vault, note, sharing } from '@secure-note/crypto';
 
 async function ready() {
   await sodium.ready;
 }
 
-class SecureNoteClient {
+/**
+ * @typedef {object} SecureNoteSession
+ * @property {string} email
+ * @property {Uint8Array} masterKey
+ * @property {Uint8Array} vaultKey
+ * @property {Uint8Array} privateKey
+ * @property {Uint8Array} publicKey
+ * @property {Uint8Array} signingPrivateKey
+ * @property {Uint8Array} signingPublicKey
+ */
+
+export class SecureNoteClient {
+  /**
+   * @param {import('./transportType.js').Transport} transport - vi du createMemoryTransport()
+   *   hoac createFetchTransport(baseUrl).
+   */
   constructor(transport) {
     if (!transport) {
       throw new Error('SecureNoteClient can 1 transport (vi du memoryTransport hoac fetch toi API that)');
     }
     this.transport = transport;
+    /** @type {SecureNoteSession | null} */
     this._session = null;
   }
 
@@ -46,22 +57,29 @@ class SecureNoteClient {
     return this._session;
   }
 
-  /** true/false - de C kiem tra nhanh truoc khi hien thi giao dien can dang nhap */
+  /**
+   * @returns {boolean} true neu dang co phien dang nhap - de giao dien kiem tra
+   *   nhanh truoc khi hien thi man hinh can dang nhap.
+   */
   isLoggedIn() {
     return this._session !== null;
   }
 
-  /** email dang dang nhap, hoac null neu chua dang nhap - de C hien thi len giao dien */
+  /** @returns {string | null} email dang dang nhap, hoac null neu chua dang nhap. */
   currentUserEmail() {
     return this._session ? this._session.email : null;
   }
 
   /**
-   * Dang ky tai khoan moi. Tu dong dang nhap luon sau khi dang ky xong
-   * (giong hanh vi thuong thay tren cac web thuc te).
+   * Dang ky tai khoan moi. Tu dong dang nhap luon sau khi dang ky xong.
+   *
+   * @param {string} email
+   * @param {string} password
+   * @returns {Promise<{email: string}>}
    */
   async register(email, password) {
     await ready();
+    const normalizedEmail = email.trim().toLowerCase();
 
     const salt = kdf.generateSalt();
     const { authKey, masterKey } = await kdf.deriveKeysFromPassword(password, salt);
@@ -76,7 +94,7 @@ class SecureNoteClient {
     const wrappedSigningPrivateKey = await sharing.wrapPrivateKey(signingKeyPair.privateKey, masterKey);
 
     await this.transport.register({
-      email,
+      email: normalizedEmail,
       saltB64: sodium.to_base64(salt),
       authKeyB64: sodium.to_base64(authKey),
       wrappedVaultKey,
@@ -87,7 +105,7 @@ class SecureNoteClient {
     });
 
     this._session = {
-      email,
+      email: normalizedEmail,
       masterKey,
       vaultKey,
       privateKey: keyPair.privateKey,
@@ -96,25 +114,32 @@ class SecureNoteClient {
       signingPublicKey: signingKeyPair.publicKey,
     };
 
-    return { email };
+    return { email: normalizedEmail };
   }
 
-  /** Dang nhap bang tai khoan da co. Nem loi neu sai email/mat khau. */
+  /**
+   * Dang nhap bang tai khoan da co. Nem loi neu sai email/mat khau.
+   *
+   * @param {string} email
+   * @param {string} password
+   * @returns {Promise<{email: string}>}
+   */
   async login(email, password) {
     await ready();
+    const normalizedEmail = email.trim().toLowerCase();
 
-    const saltB64 = await this.transport.getSalt(email);
+    const saltB64 = await this.transport.getSalt(normalizedEmail);
     const salt = sodium.from_base64(saltB64);
     const { authKey, masterKey } = await kdf.deriveKeysFromPassword(password, salt);
 
-    const record = await this.transport.login({ email, authKeyB64: sodium.to_base64(authKey) });
+    const record = await this.transport.login({ email: normalizedEmail, authKeyB64: sodium.to_base64(authKey) });
 
     const vaultKey = await vault.unwrapVaultKey(record.wrappedVaultKey, masterKey);
     const privateKey = await sharing.unwrapPrivateKey(record.wrappedPrivateKey, masterKey);
     const signingPrivateKey = await sharing.unwrapPrivateKey(record.wrappedSigningPrivateKey, masterKey);
 
     this._session = {
-      email,
+      email: normalizedEmail,
       masterKey,
       vaultKey,
       privateKey,
@@ -123,44 +148,52 @@ class SecureNoteClient {
       signingPublicKey: sodium.from_base64(record.signingPublicKeyB64),
     };
 
-    return { email };
+    return { email: normalizedEmail };
   }
 
-  /** Xoa toan bo khoa khoi bo nho - goi khi nguoi dung bam "Dang xuat" */
+  /**
+   * Dang xuat: xoa khoa khoi bo nho ngay lap tuc (sodium.memzero) truoc khi bo
+   * tham chieu, thay vi chi gan null va cho garbage collector don dep - giam
+   * thoi gian khoa nhay cam con ton tai trong RAM.
+   */
   logout() {
+    if (this._session) {
+      sodium.memzero(this._session.masterKey);
+      sodium.memzero(this._session.vaultKey);
+      sodium.memzero(this._session.privateKey);
+      sodium.memzero(this._session.signingPrivateKey);
+    }
     this._session = null;
   }
 
   /**
-   * Doi mat khau. CHI can boc lai Vault Key va cac private key bang Master
-   * Key moi - KHONG dung den bat ky note nao, du co hang nghin note (day
-   * chinh la loi ich cua key wrapping 2 lop da thiet ke trong vault.js).
+   * Doi mat khau. CHI can boc lai Vault Key va cac private key bang Master Key
+   * moi - KHONG dung den bat ky note nao, du co hang nghin note (day chinh la
+   * loi ich cua key wrapping 2 lop da thiet ke trong @secure-note/crypto/vault.js).
    *
-   * Yeu cau nhap lai mat khau CU (khong chi dua vao session hien tai) de
-   * phong truong hop tab/trinh duyet dang dang nhap bi ai do muon loi dung,
-   * ho van phai biet mat khau that moi doi duoc.
+   * Yeu cau nhap lai mat khau CU (khong chi dua vao session hien tai) de phong
+   * truong hop tab/trinh duyet dang dang nhap bi ai do muon loi dung, ho van
+   * phai biet mat khau that moi doi duoc.
+   *
+   * @param {string} oldPassword
+   * @param {string} newPassword
+   * @returns {Promise<{email: string}>}
    */
   async changePassword(oldPassword, newPassword) {
     await ready();
     const session = this._requireSession();
 
-    // Xac thuc lai bang mat khau CU truoc - goi login() de server tu xac
-    // nhan dung mat khau, nem loi ngay neu sai (khong doi gi ca trong TH nay)
     const oldSaltB64 = await this.transport.getSalt(session.email);
     const oldSalt = sodium.from_base64(oldSaltB64);
     const { authKey: oldAuthKey } = await kdf.deriveKeysFromPassword(oldPassword, oldSalt);
     await this.transport.login({ email: session.email, authKeyB64: sodium.to_base64(oldAuthKey) });
 
-    // Sinh salt + Master Key MOI tu mat khau moi
     const newSalt = kdf.generateSalt();
     const { authKey: newAuthKey, masterKey: newMasterKey } = await kdf.deriveKeysFromPassword(
       newPassword,
       newSalt
     );
 
-    // Boc lai Vault Key va 2 private key (ECDH + ky) bang Master Key MOI -
-    // Vault Key, private key, va toan bo note KHONG THAY DOI, chi lop boc
-    // ngoai cung doi thoi
     const wrappedVaultKey = await vault.wrapVaultKey(session.vaultKey, newMasterKey);
     const wrappedPrivateKey = await sharing.wrapPrivateKey(session.privateKey, newMasterKey);
     const wrappedSigningPrivateKey = await sharing.wrapPrivateKey(session.signingPrivateKey, newMasterKey);
@@ -174,13 +207,17 @@ class SecureNoteClient {
       wrappedSigningPrivateKey,
     });
 
-    // Cap nhat lai session dang mo voi Master Key moi (khong can dang nhap lai)
+    sodium.memzero(session.masterKey);
     session.masterKey = newMasterKey;
 
     return { email: session.email };
   }
 
-  /** Tao note moi, tra ve { noteId } */
+  /**
+   * Tao note moi.
+   * @param {string} text
+   * @returns {Promise<{noteId: string}>}
+   */
   async createNote(text) {
     await ready();
     const session = this._requireSession();
@@ -199,13 +236,17 @@ class SecureNoteClient {
     return { noteId };
   }
 
-  /** Danh sach note cua chinh minh (chi metadata: noteId, createdAt - chua giai ma) */
+  /** @returns {Promise<Array<{noteId: string, createdAt: number|string}>>} */
   async listNotes() {
     const session = this._requireSession();
     return this.transport.listNotes(session.email);
   }
 
-  /** Doc noi dung 1 note CUA CHINH MINH, tra ve chuoi text da giai ma */
+  /**
+   * Doc noi dung 1 note CUA CHINH MINH.
+   * @param {string} noteId
+   * @returns {Promise<string>}
+   */
   async readNote(noteId) {
     await ready();
     const session = this._requireSession();
@@ -220,12 +261,17 @@ class SecureNoteClient {
   }
 
   /**
-   * Chia se 1 note CUA CHINH MINH cho nguoi khac qua email cua ho.
-   * Chi boc dung note key cua note nay, KHONG dua Vault Key.
+   * Chia se 1 note CUA CHINH MINH cho nguoi khac qua email cua ho. Chi boc
+   * dung note key cua note nay, KHONG dua Vault Key.
+   *
+   * @param {string} noteId
+   * @param {string} recipientEmail
+   * @returns {Promise<{shareId: string}>}
    */
   async shareNote(noteId, recipientEmail) {
     await ready();
     const session = this._requireSession();
+    const normalizedRecipient = recipientEmail.trim().toLowerCase();
 
     const record = await this.transport.getNote(noteId);
     if (record.ownerEmail !== session.email) {
@@ -234,7 +280,7 @@ class SecureNoteClient {
 
     const noteKey = await vault.unwrapVaultKey(record.wrappedNoteKeyForOwner, session.vaultKey);
 
-    const recipientKeys = await this.transport.getUserKeys(recipientEmail);
+    const recipientKeys = await this.transport.getUserKeys(normalizedRecipient);
     const recipientPublicKey = sodium.from_base64(recipientKeys.publicKeyB64);
 
     const wrapped = await sharing.wrapNoteKeyForRecipient(noteKey, recipientPublicKey, session.signingPrivateKey);
@@ -242,23 +288,26 @@ class SecureNoteClient {
     const { shareId } = await this.transport.shareNote({
       noteId,
       senderEmail: session.email,
-      recipientEmail,
+      recipientEmail: normalizedRecipient,
       ...wrapped,
     });
 
     return { shareId };
   }
 
-  /** Danh sach cac goi da duoc chia se TOI minh (chi metadata, chua giai ma) */
+  /** @returns {Promise<Array<{shareId: string, noteId: string, senderEmail: string, createdAt: number|string}>>} */
   async listSharedWithMe() {
     const session = this._requireSession();
     return this.transport.listSharedWithMe(session.email);
   }
 
   /**
-   * Doc noi dung 1 note duoc NGUOI KHAC chia se toi minh. Tu dong xac minh
-   * chu ky cua nguoi gui truoc khi giai ma (xem sharing.js) - neu sai nguoi
-   * gui hoac goi tin bi sua doi thi ham nay se throw, khong tra ve noi dung.
+   * Doc noi dung 1 note duoc NGUOI KHAC chia se toi minh. Tu dong xac minh chu
+   * ky cua nguoi gui truoc khi giai ma - neu sai nguoi gui hoac goi tin bi sua
+   * doi thi ham nay se throw, khong tra ve noi dung.
+   *
+   * @param {string} shareId
+   * @returns {Promise<string>}
    */
   async readSharedNote(shareId) {
     await ready();
@@ -285,17 +334,19 @@ class SecureNoteClient {
   /**
    * Lay fingerprint cua 1 user (theo email) de hien thi cho nguoi dung doi
    * chieu thu cong TRUOC KHI chia se - phong ve chong server trao doi public
-   * key (xem publicKeyFingerprint trong sharing.js).
+   * key gia.
+   *
+   * @param {string} email
+   * @returns {Promise<{email: string, encryptionKeyFingerprint: string, signingKeyFingerprint: string}>}
    */
   async getFingerprint(email) {
     await ready();
-    const keys = await this.transport.getUserKeys(email);
+    const normalizedEmail = email.trim().toLowerCase();
+    const keys = await this.transport.getUserKeys(normalizedEmail);
     return {
-      email,
+      email: normalizedEmail,
       encryptionKeyFingerprint: sharing.publicKeyFingerprint(sodium.from_base64(keys.publicKeyB64)),
       signingKeyFingerprint: sharing.publicKeyFingerprint(sodium.from_base64(keys.signingPublicKeyB64)),
     };
   }
 }
-
-module.exports = { SecureNoteClient };

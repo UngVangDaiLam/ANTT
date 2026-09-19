@@ -1,5 +1,6 @@
-const sodium = require('libsodium-wrappers-sumo');
-const { generateSalt, deriveKeysFromPassword } = require('../src/kdf');
+import { describe, test, expect, beforeAll } from 'vitest';
+import sodium from 'libsodium-wrappers-sumo';
+import { generateSalt, deriveKeysFromPassword } from '../src/kdf.js';
 
 beforeAll(async () => {
   await sodium.ready;
@@ -33,5 +34,23 @@ describe('kdf', () => {
     const keys1 = await deriveKeysFromPassword('MatKhauManh123!', salt);
     const keys2 = await deriveKeysFromPassword('MatKhauKhac456!', salt);
     expect(sodium.to_base64(keys1.masterKey)).not.toBe(sodium.to_base64(keys2.masterKey));
+  });
+
+  test('kdfParams tuy chinh (opslimit/memlimit khac mac dinh) van deterministic', async () => {
+    const salt = generateSalt();
+    const customParams = { opslimit: 2, memlimit: 32 * 1024 * 1024 };
+    const keys1 = await deriveKeysFromPassword('MatKhauManh123!', salt, customParams);
+    const keys2 = await deriveKeysFromPassword('MatKhauManh123!', salt, customParams);
+    expect(sodium.to_base64(keys1.masterKey)).toBe(sodium.to_base64(keys2.masterKey));
+  });
+
+  test('kdfParams khac nhau -> khoa khac nhau du cung password + salt (vi sao phai luu kdfParams tung tai khoan)', async () => {
+    const salt = generateSalt();
+    const keysDefault = await deriveKeysFromPassword('MatKhauManh123!', salt);
+    const keysCustom = await deriveKeysFromPassword('MatKhauManh123!', salt, {
+      opslimit: 4,
+      memlimit: 128 * 1024 * 1024,
+    });
+    expect(sodium.to_base64(keysDefault.masterKey)).not.toBe(sodium.to_base64(keysCustom.masterKey));
   });
 });

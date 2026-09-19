@@ -1,0 +1,5 @@
+packages:
+  - "crypto"
+  - "client-sdk"
+allowBuilds:
+  esbuild: set this to true or false

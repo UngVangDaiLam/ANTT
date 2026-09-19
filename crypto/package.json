@@ -1,0 +1,20 @@
+{
+  "name": "@secure-note/crypto",
+  "version": "0.1.0",
+  "description": "Module mat ma thuan cho do an Secure Note E2EE (Argon2id + XChaCha20-Poly1305 + X25519 + Ed25519) - phu trach boi Lam. Khong goi mang.",
+  "type": "module",
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "libsodium-wrappers-sumo": "^0.8.4"
+  },
+  "devDependencies": {
+    "vitest": "^2.1.0"
+  }
+}

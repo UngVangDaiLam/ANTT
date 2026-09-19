@@ -15,12 +15,11 @@
  *   2. A dung khoa dung chung do de boc noteKey (Vault Key hoac khoa rieng cua note).
  *   3. A KY SO (Ed25519) tren toan bo goi tin da tao ra (ephemeralPublicKey,
  *      nonce, ciphertext, publicKey ECDH cua B) bang private key ky cua chinh A.
- *      Day la phan moi them de khac phuc gioi han "chua xac thuc nguoi gui".
  *   4. B nhan duoc {ephemeralPublicKey, nonce, ciphertext, signature}, TRUOC
- *      TIEN xac minh chu ky bang public key ky cua A (da co qua kenh dang tin
- *      cay - vi du doi chieu fingerprint truoc do), NEU SAI THI TU CHOI NGAY,
- *      khong giai ma. Neu dung, moi tinh lai khoa dung chung bang private key
- *      cua minh, roi mo ra noteKey.
+ *      TIEN xac minh chu ky bang public key ky (Ed25519) cua A (da co qua kenh
+ *      dang tin cay - vi du doi chieu fingerprint truoc do), NEU SAI THI TU
+ *      CHOI NGAY, khong giai ma. Neu dung, moi tinh lai khoa dung chung bang
+ *      private key cua minh, roi mo ra noteKey.
  *   5. Server chi trung chuyen cac truong o buoc 3, khong doc duoc gi va cung
  *      khong the gia mao nguoi gui vi khong co private key ky cua A.
  *
@@ -35,13 +34,16 @@
  *   goi tin nay", nhung KHONG tu dong chung minh public key ky do that su la
  *   cua A - van can mot kenh dang tin cay de trao doi public key ky ban dau
  *   (vi du doi chieu publicKeyFingerprint() qua dien thoai, giong Signal safety
- *   number). Neu ke tan cong tra public key ky ngay tu dau (MITM luc dang ky/
- *   trao doi lien lac), chu ky van "hop le" nhung voi danh tinh gia.
+ *   number).
+ * - Chu ky HIEN CHUA rang buoc noteId - mot server ac y co the doi truong
+ *   noteId cua ban ghi share (ben ngoai phong bi da ky) de "gan nham" mot goi
+ *   chia se hop le sang note khac. Day la viec CAN LAM THEM (xem khung do an,
+ *   muc 5 "them noteId vao phan duoc ky").
  */
 
-const sodium = require('libsodium-wrappers-sumo');
+import sodium from 'libsodium-wrappers-sumo';
 
-async function ready() {
+export async function ready() {
   await sodium.ready;
 }
 
@@ -56,8 +58,15 @@ function concatBytes(...arrays) {
   return result;
 }
 
-/** Sinh cap khoa X25519 cho 1 user, dung cho ECDH khi chia se (dung khi dang ky tai khoan) */
-async function generateKeyPair() {
+/**
+ * @typedef {{publicKey: Uint8Array, privateKey: Uint8Array}} KeyPair
+ * @typedef {{nonce: string, ciphertext: string}} WrappedKey
+ * @typedef {{ephemeralPublicKey: string, nonce: string, ciphertext: string, signature: string}} SharedNoteKeyPackage
+ */
+
+/** Sinh cap khoa X25519 cho 1 user, dung cho ECDH khi chia se (dung khi dang ky tai khoan).
+ * @returns {Promise<KeyPair>} */
+export async function generateKeyPair() {
   await ready();
   const kp = sodium.crypto_box_keypair(); // cap khoa Curve25519, dung duoc cho scalarmult
   return { publicKey: kp.publicKey, privateKey: kp.privateKey };
@@ -66,8 +75,9 @@ async function generateKeyPair() {
 /**
  * Sinh cap khoa Ed25519 RIENG de KY SO, tach biet hoan toan voi cap khoa
  * ECDH o tren. Dung khi dang ky tai khoan, giong nhu generateKeyPair().
+ * @returns {Promise<KeyPair>}
  */
-async function generateSigningKeyPair() {
+export async function generateSigningKeyPair() {
   await ready();
   const kp = sodium.crypto_sign_keypair(); // Ed25519 - chi dung de ky/xac minh, KHONG dung de ma hoa
   return { publicKey: kp.publicKey, privateKey: kp.privateKey };
@@ -75,13 +85,14 @@ async function generateSigningKeyPair() {
 
 /**
  * Boc private key (ECDH hoac ky so, ham nay dung chung duoc vi chi la boc 1
- * mang byte bang AEAD) cua chinh minh bang Master Key truoc khi gui len server luu
+ * mang byte bang AEAD) cua chinh minh bang Master Key truoc khi gui len server luu.
+ * @param {Uint8Array} privateKey
+ * @param {Uint8Array} masterKey
+ * @returns {Promise<WrappedKey>}
  */
-async function wrapPrivateKey(privateKey, masterKey) {
+export async function wrapPrivateKey(privateKey, masterKey) {
   await ready();
-  const nonce = sodium.randombytes_buf(
-    sodium.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES
-  );
+  const nonce = sodium.randombytes_buf(sodium.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES);
   const ciphertext = sodium.crypto_aead_xchacha20poly1305_ietf_encrypt(
     privateKey,
     null,
@@ -92,18 +103,15 @@ async function wrapPrivateKey(privateKey, masterKey) {
   return { nonce: sodium.to_base64(nonce), ciphertext: sodium.to_base64(ciphertext) };
 }
 
-/** Mo private key da boc, dung sau khi dang nhap va da co masterKey */
-async function unwrapPrivateKey(wrapped, masterKey) {
+/** Mo private key da boc, dung sau khi dang nhap va da co masterKey.
+ * @param {WrappedKey} wrapped
+ * @param {Uint8Array} masterKey
+ * @returns {Promise<Uint8Array>} */
+export async function unwrapPrivateKey(wrapped, masterKey) {
   await ready();
   const nonce = sodium.from_base64(wrapped.nonce);
   const ciphertext = sodium.from_base64(wrapped.ciphertext);
-  return sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(
-    null,
-    ciphertext,
-    null,
-    nonce,
-    masterKey
-  );
+  return sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(null, ciphertext, null, nonce, masterKey);
 }
 
 /**
@@ -112,10 +120,7 @@ async function unwrapPrivateKey(wrapped, masterKey) {
  * lien quan de "gan" ngu canh (context binding) - thong le tot khi xay ECIES.
  */
 function deriveSharedKey(sharedSecret, ephemeralPublicKey, recipientPublicKey) {
-  return sodium.crypto_generichash(
-    32,
-    concatBytes(sharedSecret, ephemeralPublicKey, recipientPublicKey)
-  );
+  return sodium.crypto_generichash(32, concatBytes(sharedSecret, ephemeralPublicKey, recipientPublicKey));
 }
 
 /**
@@ -123,37 +128,27 @@ function deriveSharedKey(sharedSecret, ephemeralPublicKey, recipientPublicKey) {
  * private key ky (Ed25519) cua chinh A - de B xac minh dung la A gui, khong
  * phai ai khac gia mao (ke ca khi server bi chiem quyen va sua doi ban tin).
  *
- * senderSigningPrivateKey: private key Ed25519 cua NGUOI GUI (A), lay tu
- * generateSigningKeyPair() luc dang ky, KHONG PHAI private key ECDH.
+ * @param {Uint8Array} noteKey - khoa AEAD cua note can chia se.
+ * @param {Uint8Array} recipientPublicKey - public key X25519 cua nguoi nhan.
+ * @param {Uint8Array} senderSigningPrivateKey - private key Ed25519 cua NGUOI GUI (A),
+ *   lay tu generateSigningKeyPair() luc dang ky, KHONG PHAI private key ECDH.
+ * @returns {Promise<SharedNoteKeyPackage>}
  */
-async function wrapNoteKeyForRecipient(noteKey, recipientPublicKey, senderSigningPrivateKey) {
+export async function wrapNoteKeyForRecipient(noteKey, recipientPublicKey, senderSigningPrivateKey) {
   await ready();
   const ephemeral = sodium.crypto_box_keypair();
   const sharedSecret = sodium.crypto_scalarmult(ephemeral.privateKey, recipientPublicKey);
   const wrapKey = deriveSharedKey(sharedSecret, ephemeral.publicKey, recipientPublicKey);
   sodium.memzero(sharedSecret);
 
-  const nonce = sodium.randombytes_buf(
-    sodium.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES
-  );
-  const ciphertext = sodium.crypto_aead_xchacha20poly1305_ietf_encrypt(
-    noteKey,
-    null,
-    null,
-    nonce,
-    wrapKey
-  );
+  const nonce = sodium.randombytes_buf(sodium.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES);
+  const ciphertext = sodium.crypto_aead_xchacha20poly1305_ietf_encrypt(noteKey, null, null, nonce, wrapKey);
   sodium.memzero(wrapKey);
 
   // Ky so tren toan bo goi tin (ephemeralPublicKey + nonce + ciphertext +
   // recipientPublicKey) - gan chu ky voi DUNG goi tin nay va DUNG nguoi nhan
   // nay, tranh truong hop mot goi da ky hop le bi dem "gan" sang ngu canh khac.
-  const signedMessage = concatBytes(
-    ephemeral.publicKey,
-    nonce,
-    ciphertext,
-    recipientPublicKey
-  );
+  const signedMessage = concatBytes(ephemeral.publicKey, nonce, ciphertext, recipientPublicKey);
   const signature = sodium.crypto_sign_detached(signedMessage, senderSigningPrivateKey);
 
   return {
@@ -169,10 +164,13 @@ async function wrapNoteKeyForRecipient(noteKey, recipientPublicKey, senderSignin
  * chu ky bang public key ky (Ed25519) cua A. Neu chu ky sai (sai nguoi gui,
  * hoac ban tin bi sua doi tren duong truyen) thi throw NGAY, khong giai ma.
  *
- * senderSigningPublicKey: public key Ed25519 cua NGUOI GUI (A) - B phai co
- * duoc key nay qua kenh dang tin cay (vi du doi chieu fingerprint truoc do).
+ * @param {SharedNoteKeyPackage} wrapped
+ * @param {Uint8Array} myPrivateKey - private key X25519 cua nguoi nhan (B).
+ * @param {Uint8Array} senderSigningPublicKey - public key Ed25519 cua NGUOI GUI (A) -
+ *   B phai co duoc key nay qua kenh dang tin cay (vi du doi chieu fingerprint truoc do).
+ * @returns {Promise<Uint8Array>}
  */
-async function unwrapNoteKeyFromSender(wrapped, myPrivateKey, senderSigningPublicKey) {
+export async function unwrapNoteKeyFromSender(wrapped, myPrivateKey, senderSigningPublicKey) {
   await ready();
   const ephemeralPublicKey = sodium.from_base64(wrapped.ephemeralPublicKey);
   const nonce = sodium.from_base64(wrapped.nonce);
@@ -183,11 +181,7 @@ async function unwrapNoteKeyFromSender(wrapped, myPrivateKey, senderSigningPubli
 
   // Xac minh chu ky TRUOC KHI giai ma - tu choi som neu khong dung nguoi gui
   const signedMessage = concatBytes(ephemeralPublicKey, nonce, ciphertext, myPublicKey);
-  const isValidSignature = sodium.crypto_sign_verify_detached(
-    signature,
-    signedMessage,
-    senderSigningPublicKey
-  );
+  const isValidSignature = sodium.crypto_sign_verify_detached(signature, signedMessage, senderSigningPublicKey);
   if (!isValidSignature) {
     throw new Error('Chu ky khong hop le: goi tin khong den tu dung nguoi gui, hoac da bi sua doi.');
   }
@@ -196,13 +190,7 @@ async function unwrapNoteKeyFromSender(wrapped, myPrivateKey, senderSigningPubli
   const wrapKey = deriveSharedKey(sharedSecret, ephemeralPublicKey, myPublicKey);
   sodium.memzero(sharedSecret);
 
-  const noteKey = sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(
-    null,
-    ciphertext,
-    null,
-    nonce,
-    wrapKey
-  );
+  const noteKey = sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(null, ciphertext, null, nonce, wrapKey);
   sodium.memzero(wrapKey);
   return noteKey;
 }
@@ -213,19 +201,12 @@ async function unwrapNoteKeyFromSender(wrapped, myPrivateKey, senderSigningPubli
  * truoc khi tin tuong dung public key do de chia se hoac xac minh chu ky -
  * tuong tu "safety number" cua Signal. Day la lop phong ve THU CONG, khong
  * phai xac thuc mat ma tu dong.
+ *
+ * @param {Uint8Array} publicKey
+ * @returns {string} vi du "a1b2 c3d4 e5f6 g7h8"
  */
-function publicKeyFingerprint(publicKey) {
+export function publicKeyFingerprint(publicKey) {
   const hash = sodium.crypto_generichash(16, publicKey);
   const hex = sodium.to_hex(hash);
   return hex.match(/.{1,4}/g).join(' ');
 }
-
-module.exports = {
-  generateKeyPair,
-  generateSigningKeyPair,
-  wrapPrivateKey,
-  unwrapPrivateKey,
-  wrapNoteKeyForRecipient,
-  unwrapNoteKeyFromSender,
-  publicKeyFingerprint,
-};

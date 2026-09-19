@@ -11,14 +11,19 @@
  * cuc nhanh), KHONG PHAI dung lai tung note mot (co the hang nghin note).
  */
 
-const sodium = require('libsodium-wrappers-sumo');
+import sodium from 'libsodium-wrappers-sumo';
 
-async function ready() {
+/**
+ * @typedef {{nonce: string, ciphertext: string}} WrappedKey
+ * Nonce/ciphertext dang chuoi base64, san sang de gui qua JSON.
+ */
+
+export async function ready() {
   await sodium.ready;
 }
 
-/** Sinh Vault Key ngau nhien - moi user 1 vault key, sinh 1 lan khi tao tai khoan */
-function generateVaultKey() {
+/** Sinh Vault Key ngau nhien - moi user 1 vault key, sinh 1 lan khi tao tai khoan. */
+export function generateVaultKey() {
   return sodium.randombytes_buf(32);
 }
 
@@ -26,12 +31,14 @@ function generateVaultKey() {
  * Boc Vault Key bang Master Key, dung AEAD XChaCha20-Poly1305.
  * Nonce 24 byte -> random moi lan la an toan tuyet doi (khong lo trung nonce
  * nhu AES-GCM 96-bit), nen khong can co che dem/quan ly nonce phuc tap.
+ *
+ * @param {Uint8Array} vaultKey
+ * @param {Uint8Array} masterKey
+ * @returns {Promise<WrappedKey>}
  */
-async function wrapVaultKey(vaultKey, masterKey) {
+export async function wrapVaultKey(vaultKey, masterKey) {
   await ready();
-  const nonce = sodium.randombytes_buf(
-    sodium.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES
-  );
+  const nonce = sodium.randombytes_buf(sodium.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES);
   const ciphertext = sodium.crypto_aead_xchacha20poly1305_ietf_encrypt(
     vaultKey,
     null, // khong co additional data
@@ -49,19 +56,14 @@ async function wrapVaultKey(vaultKey, masterKey) {
  * Mo Vault Key. Neu masterKey sai HOAC ciphertext bi sua du chi 1 byte,
  * ham nay se throw (Poly1305 tag khong khop) - day chinh la co che "tu kiem
  * tra toan ven" ma de xuat da nhac trong Buoc hoat dong so 5.
+ *
+ * @param {WrappedKey} wrapped
+ * @param {Uint8Array} masterKey
+ * @returns {Promise<Uint8Array>}
  */
-async function unwrapVaultKey(wrapped, masterKey) {
+export async function unwrapVaultKey(wrapped, masterKey) {
   await ready();
   const nonce = sodium.from_base64(wrapped.nonce);
   const ciphertext = sodium.from_base64(wrapped.ciphertext);
-  const vaultKey = sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(
-    null,
-    ciphertext,
-    null,
-    nonce,
-    masterKey
-  );
-  return vaultKey;
+  return sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(null, ciphertext, null, nonce, masterKey);
 }
-
-module.exports = { generateVaultKey, wrapVaultKey, unwrapVaultKey };
