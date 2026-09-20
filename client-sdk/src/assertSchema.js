@@ -1,10 +1,12 @@
 /**
  * assertSchema.js
  * ---------------
- * Ham dung chung: kiem tra 1 gia tri (thuong la response JSON tu server) khop
- * voi 1 TypeBox schema, dung Value.Check (khong sinh code, an toan voi CSP -
- * xem schemas.js). Neu sai, nem loi ro rang kem chi tiet dau tien tim thay,
- * thay vi de code phia sau (giai ma, base64...) nem ra loi mo ho kho debug.
+ * Kiểm tra một giá trị (thường là response JSON từ server) có khớp schema
+ * TypeBox trong `@secure-notes/shared` hay không, bằng Value.Check — không sinh
+ * code lúc chạy nên không vi phạm CSP (D06).
+ *
+ * Sai schema thì ném lỗi rõ ràng ngay tại đây, thay vì để code phía sau (giải
+ * mã, base64...) ném ra lỗi mơ hồ khó lần ra nguyên nhân.
  */
 
 import { Value } from '@sinclair/typebox/value';
@@ -12,17 +14,17 @@ import { Value } from '@sinclair/typebox/value';
 /**
  * @param {import('@sinclair/typebox').TSchema} schema
  * @param {unknown} value
- * @param {string} contextLabel - vi du "GET /notes/:id" - de bao loi de doc hon.
- * @returns {unknown} chinh value dau vao, khong doi gi, chi de tien goi theo kieu `return assertSchema(...)`.
+ * @param {string} contextLabel ví dụ "GET /api/notes/:id" — để thông báo lỗi dễ đọc hơn.
+ * @returns {unknown} chính giá trị đầu vào, không đổi gì, để tiện viết `return assertSchema(...)`.
  */
 export function assertSchema(schema, value, contextLabel) {
   if (Value.Check(schema, value)) {
     return value;
   }
   const firstError = Value.Errors(schema, value).First();
-  const detail = firstError ? `${firstError.path}: ${firstError.message}` : 'khong ro chi tiet';
+  const detail = firstError ? `${firstError.path}: ${firstError.message}` : 'không rõ chi tiết';
   throw new Error(
-    `Phan hoi tu server khong dung dinh dang mong doi (${contextLabel}) - ${detail}. ` +
-      'Day co the la dau hieu server bi loi hoac bi can thiep, tu choi xu ly tiep de an toan.',
+    `Phản hồi từ server không đúng định dạng mong đợi (${contextLabel}) - ${detail}. ` +
+      'Đây có thể là dấu hiệu server bị lỗi hoặc bị can thiệp, từ chối xử lý tiếp cho an toàn.',
   );
 }

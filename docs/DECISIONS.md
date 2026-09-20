@@ -74,3 +74,37 @@ nếu đổi ý thì ghi quyết định mới thay thế.
   để tránh race condition.
 - **D36. Đăng ký không tạo phiên**, trả `201` body rỗng; client đăng nhập ngay sau đó. Chỉ có một chỗ tạo phiên
   là `POST /api/login`, dễ kiểm soát và ghi lịch sử đăng nhập.
+
+## client-sdk
+
+- **D37. `client-sdk` dùng chung schema trong `shared/`, không có schema riêng.** Bản cũ tự định nghĩa
+  một bộ schema song song với `additionalProperties: true` ở mọi object — vừa trái quy ước, vừa vô
+  hiệu hóa chính lớp phòng thủ mà nó tự nhận là chống "server độc hại", vì trường lạ (kể cả
+  `__proto__`) lọt qua hết. Hai bản schema cho cùng một API thì sớm muộn cũng lệch nhau: đó chính là
+  nguyên nhân khiến SDK gửi `saltB64`/`publicKeyB64` trong khi server chờ `salt`/`x25519PublicKey`.
+  Nay mọi response đều kiểm tra bằng đúng schema server dùng để kiểm tra request.
+- **D38. Transport không nhận email cho thao tác cần đăng nhập.** D16 nói server lấy danh tính từ
+  phiên; nếu hàm transport vẫn có tham số `ownerEmail`/`recipientEmail`/`senderEmail` thì client vẫn
+  quen tay gửi lên và người đọc code tưởng server tin giá trị đó. Email chỉ còn ở ba chỗ nó thật sự
+  là dữ liệu đầu vào: tra salt, tra khóa công khai của người khác, và chọn người nhận khi chia sẻ.
+- **D39. `memoryTransport` kiểm tra hợp đồng chứ không chỉ giả lập kho dữ liệu.** Nó kiểm tra payload
+  gửi lên và dữ liệu trả về bằng chính schema của `shared/`, lấy danh tính từ phiên của nó, và trả
+  `NOT_FOUND` cho note không thuộc về người gọi. Nhờ vậy lệch tên trường hay quên đăng nhập là test
+  đỏ ngay, không phải đợi nối vào server thật. Tách `createMemoryServer()` (kho dùng chung) khỏi
+  `connect()` (một trình duyệt, một phiên) để test dựng được nhiều người dùng trên cùng một server.
+- **D40. Mã lỗi mới `NOTE_ID_TAKEN` (409).** D17 yêu cầu server từ chối `noteId` đã tồn tại, nhưng
+  chưa có mã lỗi cho việc đó; dùng `VERSION_CONFLICT` sẽ gây hiểu nhầm. Có lộ việc "id này đã tồn
+  tại", nhưng UUID v4 không đoán được nên không dò được gì.
+- **D41. `GET /api/notes` trả kèm `wrappedNoteKey` của từng note.** D21 mã hóa tiêu đề riêng để danh
+  sách không phải tải nội dung, nhưng nếu không có khóa note đã bọc thì client không giải mã nổi
+  tiêu đề và danh sách sẽ trống trơn. Khóa đó đã bọc bằng Vault Key của chính người gọi nên server
+  không biết thêm gì.
+
+## Quy ước mã hóa nhị phân
+
+- **D42. Biến thể base64 ghi tường minh trong `crypto/src/base64.js`.** D11 chốt dùng base64url không
+  padding, và đó cũng là mặc định của libsodium nên trước giờ code chỉ viết `to_base64(x)`. Rủi ro:
+  schema trong `shared/` kiểm tra bằng pattern `^[A-Za-z0-9_-]+$` và độ dài chính xác theo số byte,
+  nên chỉ cần một chỗ lỡ dùng `base64_variants.ORIGINAL` là server từ chối request mà không rõ vì
+  sao. Nay `crypto/` và `client-sdk/` đều đi qua `toBase64`/`fromBase64`, biến quy ước ngầm thành
+  quy ước tường minh ở đúng một chỗ.

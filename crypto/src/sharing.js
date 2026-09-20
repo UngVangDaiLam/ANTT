@@ -42,6 +42,7 @@
  */
 
 import sodium from 'libsodium-wrappers-sumo';
+import { toBase64, fromBase64 } from './base64.js';
 
 export async function ready() {
   await sodium.ready;
@@ -100,7 +101,7 @@ export async function wrapPrivateKey(privateKey, masterKey) {
     nonce,
     masterKey,
   );
-  return { nonce: sodium.to_base64(nonce), ciphertext: sodium.to_base64(ciphertext) };
+  return { nonce: toBase64(nonce), ciphertext: toBase64(ciphertext) };
 }
 
 /** Mo private key da boc, dung sau khi dang nhap va da co masterKey.
@@ -109,8 +110,8 @@ export async function wrapPrivateKey(privateKey, masterKey) {
  * @returns {Promise<Uint8Array>} */
 export async function unwrapPrivateKey(wrapped, masterKey) {
   await ready();
-  const nonce = sodium.from_base64(wrapped.nonce);
-  const ciphertext = sodium.from_base64(wrapped.ciphertext);
+  const nonce = fromBase64(wrapped.nonce);
+  const ciphertext = fromBase64(wrapped.ciphertext);
   return sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(
     null,
     ciphertext,
@@ -171,10 +172,10 @@ export async function wrapNoteKeyForRecipient(
   const signature = sodium.crypto_sign_detached(signedMessage, senderSigningPrivateKey);
 
   return {
-    ephemeralPublicKey: sodium.to_base64(ephemeral.publicKey),
-    nonce: sodium.to_base64(nonce),
-    ciphertext: sodium.to_base64(ciphertext),
-    signature: sodium.to_base64(signature),
+    ephemeralPublicKey: toBase64(ephemeral.publicKey),
+    nonce: toBase64(nonce),
+    ciphertext: toBase64(ciphertext),
+    signature: toBase64(signature),
   };
 }
 
@@ -191,10 +192,10 @@ export async function wrapNoteKeyForRecipient(
  */
 export async function unwrapNoteKeyFromSender(wrapped, myPrivateKey, senderSigningPublicKey) {
   await ready();
-  const ephemeralPublicKey = sodium.from_base64(wrapped.ephemeralPublicKey);
-  const nonce = sodium.from_base64(wrapped.nonce);
-  const ciphertext = sodium.from_base64(wrapped.ciphertext);
-  const signature = sodium.from_base64(wrapped.signature);
+  const ephemeralPublicKey = fromBase64(wrapped.ephemeralPublicKey);
+  const nonce = fromBase64(wrapped.nonce);
+  const ciphertext = fromBase64(wrapped.ciphertext);
+  const signature = fromBase64(wrapped.signature);
 
   const myPublicKey = sodium.crypto_scalarmult_base(myPrivateKey);
 

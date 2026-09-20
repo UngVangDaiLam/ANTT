@@ -59,15 +59,13 @@ pnpm dev:web               # http://localhost:5173, /api tự chuyển về serv
 - Đổi API thì cập nhật `docs/API.md` và schema trong `shared/` cùng lúc.
 - Script trong `package.json` phải chạy được trên cả Windows lẫn Linux (không dùng cú pháp riêng của bash).
 
-## Chuyển code của Lâm vào repo này
+## Benchmark Argon2id
 
-1. Chép `src/kdf.js`, `vault.js`, `note.js`, `sharing.js` vào `crypto/src/`; test tương ứng vào `crypto/test/`; benchmark vào
-   `crypto/benchmark/` (**còn thiếu**: `argon2-benchmark.js` vẫn ở thư mục gốc `benchmark/`, chưa chuyển
-   vào `crypto/benchmark/` — script `benchmark` trong `crypto/package.json` sẽ lỗi cho đến khi chuyển).
-2. Chép `src/client.js`, `fetchTransport.js`, `memoryTransport.js` vào `client-sdk/src/`; `client.test.js` vào `client-sdk/test/`.
-3. Đổi `require(...)` thành `import`, `module.exports` thành `export`. Trong test, đổi import của Jest sang `import { describe, test, expect } from 'vitest'`.
-4. Dùng `libsodium-wrappers-sumo` bản 0.8.x đã khai báo sẵn trong `crypto/package.json` (bản 0.7.x lỗi khi import ESM, xem D32).
-5. Export lại trong `crypto/src/index.js` và `client-sdk/src/index.js` (có hướng dẫn sẵn trong file).
-6. `client-sdk` import crypto bằng `import { ... } from '@secure-notes/crypto'`, không dùng đường dẫn tương đối sang thư mục khác.
-7. Chạy `pnpm check` cho đến khi qua hết rồi commit. Các thay đổi đã chốt trong `docs/DECISIONS.md` làm ở commit sau, để
-   commit này chỉ là chuyển code.
+Tham số Argon2id (`KDF_DEFAULTS` trong `shared/src/config.js`) là đánh đổi giữa trải nghiệm và chi phí
+mà kẻ tấn công phải trả cho mỗi mật khẩu đoán thử khi chúng lấy được database. Đo trên máy mình:
+
+```bash
+pnpm --filter @secure-notes/crypto benchmark
+```
+
+Nên chạy thêm trên một máy yếu hơn và trên trình duyệt di động rồi ghi số liệu vào báo cáo.

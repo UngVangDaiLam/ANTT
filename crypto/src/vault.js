@@ -12,6 +12,7 @@
  */
 
 import sodium from 'libsodium-wrappers-sumo';
+import { toBase64, fromBase64 } from './base64.js';
 
 /**
  * @typedef {{nonce: string, ciphertext: string}} WrappedKey
@@ -47,8 +48,8 @@ export async function wrapVaultKey(vaultKey, masterKey) {
     masterKey,
   );
   return {
-    nonce: sodium.to_base64(nonce),
-    ciphertext: sodium.to_base64(ciphertext),
+    nonce: toBase64(nonce),
+    ciphertext: toBase64(ciphertext),
   };
 }
 
@@ -63,8 +64,8 @@ export async function wrapVaultKey(vaultKey, masterKey) {
  */
 export async function unwrapVaultKey(wrapped, masterKey) {
   await ready();
-  const nonce = sodium.from_base64(wrapped.nonce);
-  const ciphertext = sodium.from_base64(wrapped.ciphertext);
+  const nonce = fromBase64(wrapped.nonce);
+  const ciphertext = fromBase64(wrapped.ciphertext);
   return sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(
     null,
     ciphertext,

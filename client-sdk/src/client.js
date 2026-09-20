@@ -1,28 +1,25 @@
 /**
- * client.js (package @secure-note/client-sdk)
+ * client.js (package @secure-notes/client-sdk)
  * ---------------------------------------------
- * Lop "client SDK" cap cao - day la lop giao dien web (Phan Bao) se goi truc
- * tiep. Giao dien KHONG BAO GIO tu goi @secure-note/crypto hay tu cam vao
- * khai niem Master Key/Vault Key/private key - chi goi cac ham public o day,
- * truyen vao/nhan ve du lieu thuong (chuoi, object thuong).
+ * Lớp "client SDK" cấp cao — đây là lớp mà giao diện web gọi trực tiếp. Giao
+ * diện KHÔNG bao giờ tự gọi @secure-notes/crypto và không phải biết tới Master
+ * Key / Vault Key / note key: chỉ gọi các hàm ở đây, truyền vào và nhận về dữ
+ * liệu thường (chuỗi, object thường).
  *
- * SecureNoteClient nhan vao 1 "transport" - bat ky object nao co du cac ham
- * async trong Transport (xem transportType.js). Dung memoryTransport.js (server
- * gia trong bo nho) de tu phat trien/test doc lap voi backend. Khi backend that
- * xong, chi can doi transport thanh createFetchTransport(...) - KHONG SUA GI
- * trong file nay ca.
+ * SecureNoteClient nhận vào một "transport" (xem transportType.js):
+ * createMemoryTransport() để tự phát triển/test, createFetchTransport() khi nối
+ * vào server thật. Đổi transport KHÔNG phải sửa gì trong file này.
  *
- * Trang thai dang nhap (masterKey, vaultKey, private key...) chi luu trong
- * thuoc tinh rieng cua instance (this._session) - nghia la CHI TON TAI TRONG
- * BO NHO cua tab trinh duyet dang mo, mat khi refresh trang. KHONG BAO GIO ghi
- * cac gia tri nay ra localStorage/sessionStorage.
+ * Trạng thái đăng nhập (masterKey, vaultKey, private key...) chỉ nằm trong
+ * thuộc tính riêng của instance — nghĩa là CHỈ TỒN TẠI TRONG BỘ NHỚ của tab
+ * đang mở, mất khi refresh. KHÔNG bao giờ ghi ra localStorage/sessionStorage.
  */
 
-import { getSodium, kdf, vault, note, sharing } from '@secure-notes/crypto';
+import { getSodium, kdf, vault, note, sharing, toBase64, fromBase64 } from '@secure-notes/crypto';
+import { KDF_DEFAULTS, LIMITS, NOTE_VERSION_START, normalizeEmail } from '@secure-notes/shared';
 
-// client-sdk KHONG tu import libsodium-wrappers-sumo: moi thao tac ma hoa di
-// qua @secure-notes/crypto (dung export getSodium() co san) de chi mot cho
-// duy nhat trong repo cham vao thu vien libsodium.
+// client-sdk KHÔNG tự import libsodium-wrappers-sumo: mọi thao tác mật mã đi
+// qua @secure-notes/crypto để chỉ một chỗ duy nhất trong repo chạm vào thư viện.
 let sodium;
 
 async function ready() {
@@ -34,22 +31,20 @@ async function ready() {
  * @property {string} email
  * @property {Uint8Array} masterKey
  * @property {Uint8Array} vaultKey
- * @property {Uint8Array} privateKey
- * @property {Uint8Array} publicKey
- * @property {Uint8Array} signingPrivateKey
- * @property {Uint8Array} signingPublicKey
+ * @property {Uint8Array} x25519PrivateKey
+ * @property {Uint8Array} x25519PublicKey
+ * @property {Uint8Array} ed25519PrivateKey
+ * @property {Uint8Array} ed25519PublicKey
  */
 
 export class SecureNoteClient {
   /**
-   * @param {import('./transportType.js').Transport} transport - vi du createMemoryTransport()
-   *   hoac createFetchTransport(baseUrl).
+   * @param {import('./transportType.js').Transport} transport — ví dụ
+   *   createMemoryTransport() hoặc createFetchTransport().
    */
   constructor(transport) {
     if (!transport) {
-      throw new Error(
-        'SecureNoteClient can 1 transport (vi du memoryTransport hoac fetch toi API that)',
-      );
+      throw new Error('SecureNoteClient cần một transport (memoryTransport hoặc fetchTransport)');
     }
     this.transport = transport;
     /** @type {SecureNoteSession | null} */
@@ -58,26 +53,27 @@ export class SecureNoteClient {
 
   _requireSession() {
     if (!this._session) {
-      throw new Error('Chua dang nhap - goi register() hoac login() truoc');
+      throw new Error('Chưa đăng nhập — gọi register() hoặc login() trước');
     }
     return this._session;
   }
 
-  /**
-   * @returns {boolean} true neu dang co phien dang nhap - de giao dien kiem tra
-   *   nhanh truoc khi hien thi man hinh can dang nhap.
-   */
+  /** @returns {boolean} để giao diện kiểm tra nhanh trước khi hiện màn hình cần đăng nhập. */
   isLoggedIn() {
     return this._session !== null;
   }
 
-  /** @returns {string | null} email dang dang nhap, hoac null neu chua dang nhap. */
+  /** @returns {string | null} email đang đăng nhập, hoặc null. */
   currentUserEmail() {
     return this._session ? this._session.email : null;
   }
 
   /**
-   * Dang ky tai khoan moi. Tu dong dang nhap luon sau khi dang ky xong.
+   * Đăng ký tài khoản mới rồi đăng nhập luôn.
+   *
+   * Server KHÔNG tạo phiên khi đăng ký (D36), nên hàm này gọi tiếp /api/login.
+   * Nó dùng lại authKey vừa dẫn xuất thay vì chạy Argon2id lần thứ hai — Argon2id
+   * với 64 MB bộ nhớ là thao tác đắt nhất trong cả luồng.
    *
    * @param {string} email
    * @param {string} password
@@ -85,49 +81,55 @@ export class SecureNoteClient {
    */
   async register(email, password) {
     await ready();
-    const normalizedEmail = email.trim().toLowerCase();
+    const normalizedEmail = normalizeEmail(email);
 
     const salt = kdf.generateSalt();
-    const { authKey, masterKey } = await kdf.deriveKeysFromPassword(password, salt);
+    const kdfParams = { ...KDF_DEFAULTS };
+    const { authKey, masterKey } = await kdf.deriveKeysFromPassword(password, salt, kdfParams);
 
     const vaultKey = vault.generateVaultKey();
     const wrappedVaultKey = await vault.wrapVaultKey(vaultKey, masterKey);
 
-    const keyPair = await sharing.generateKeyPair();
-    const wrappedPrivateKey = await sharing.wrapPrivateKey(keyPair.privateKey, masterKey);
+    const x25519 = await sharing.generateKeyPair();
+    const wrappedX25519PrivateKey = await sharing.wrapPrivateKey(x25519.privateKey, masterKey);
 
-    const signingKeyPair = await sharing.generateSigningKeyPair();
-    const wrappedSigningPrivateKey = await sharing.wrapPrivateKey(
-      signingKeyPair.privateKey,
-      masterKey,
-    );
+    const ed25519 = await sharing.generateSigningKeyPair();
+    const wrappedEd25519PrivateKey = await sharing.wrapPrivateKey(ed25519.privateKey, masterKey);
 
+    const authKeyB64 = toBase64(authKey);
     await this.transport.register({
       email: normalizedEmail,
-      saltB64: sodium.to_base64(salt),
-      authKeyB64: sodium.to_base64(authKey),
+      salt: toBase64(salt),
+      kdfParams,
+      authKey: authKeyB64,
       wrappedVaultKey,
-      publicKeyB64: sodium.to_base64(keyPair.publicKey),
-      wrappedPrivateKey,
-      signingPublicKeyB64: sodium.to_base64(signingKeyPair.publicKey),
-      wrappedSigningPrivateKey,
+      x25519PublicKey: toBase64(x25519.publicKey),
+      ed25519PublicKey: toBase64(ed25519.publicKey),
+      wrappedX25519PrivateKey,
+      wrappedEd25519PrivateKey,
     });
+
+    await this.transport.login({ email: normalizedEmail, authKey: authKeyB64 });
 
     this._session = {
       email: normalizedEmail,
       masterKey,
       vaultKey,
-      privateKey: keyPair.privateKey,
-      publicKey: keyPair.publicKey,
-      signingPrivateKey: signingKeyPair.privateKey,
-      signingPublicKey: signingKeyPair.publicKey,
+      x25519PrivateKey: x25519.privateKey,
+      x25519PublicKey: x25519.publicKey,
+      ed25519PrivateKey: ed25519.privateKey,
+      ed25519PublicKey: ed25519.publicKey,
     };
 
     return { email: normalizedEmail };
   }
 
   /**
-   * Dang nhap bang tai khoan da co. Nem loi neu sai email/mat khau.
+   * Đăng nhập. Ném lỗi nếu sai email/mật khẩu.
+   *
+   * Dùng đúng kdfParams mà server trả kèm salt (D13), KHÔNG dùng hằng số mặc
+   * định hiện tại — nếu không, tài khoản đăng ký trước khi tham số Argon2id
+   * được tăng sẽ dẫn xuất ra sai khóa.
    *
    * @param {string} email
    * @param {string} password
@@ -135,60 +137,72 @@ export class SecureNoteClient {
    */
   async login(email, password) {
     await ready();
-    const normalizedEmail = email.trim().toLowerCase();
+    const normalizedEmail = normalizeEmail(email);
 
-    const saltB64 = await this.transport.getSalt(normalizedEmail);
-    const salt = sodium.from_base64(saltB64);
-    const { authKey, masterKey } = await kdf.deriveKeysFromPassword(password, salt);
+    const { salt, kdfParams } = await this.transport.getSalt(normalizedEmail);
+    const { authKey, masterKey } = await kdf.deriveKeysFromPassword(
+      password,
+      fromBase64(salt),
+      kdfParams,
+    );
 
-    const record = await this.transport.login({
+    const account = await this.transport.login({
       email: normalizedEmail,
-      authKeyB64: sodium.to_base64(authKey),
+      authKey: toBase64(authKey),
     });
 
-    const vaultKey = await vault.unwrapVaultKey(record.wrappedVaultKey, masterKey);
-    const privateKey = await sharing.unwrapPrivateKey(record.wrappedPrivateKey, masterKey);
-    const signingPrivateKey = await sharing.unwrapPrivateKey(
-      record.wrappedSigningPrivateKey,
+    const vaultKey = await vault.unwrapVaultKey(account.wrappedVaultKey, masterKey);
+    const x25519PrivateKey = await sharing.unwrapPrivateKey(
+      account.wrappedX25519PrivateKey,
+      masterKey,
+    );
+    const ed25519PrivateKey = await sharing.unwrapPrivateKey(
+      account.wrappedEd25519PrivateKey,
       masterKey,
     );
 
     this._session = {
-      email: normalizedEmail,
+      email: account.email,
       masterKey,
       vaultKey,
-      privateKey,
-      publicKey: sodium.from_base64(record.publicKeyB64),
-      signingPrivateKey,
-      signingPublicKey: sodium.from_base64(record.signingPublicKeyB64),
+      x25519PrivateKey,
+      x25519PublicKey: fromBase64(account.x25519PublicKey),
+      ed25519PrivateKey,
+      ed25519PublicKey: fromBase64(account.ed25519PublicKey),
     };
 
-    return { email: normalizedEmail };
+    return { email: account.email };
   }
 
   /**
-   * Dang xuat: xoa khoa khoi bo nho ngay lap tuc (sodium.memzero) truoc khi bo
-   * tham chieu, thay vi chi gan null va cho garbage collector don dep - giam
-   * thoi gian khoa nhay cam con ton tai trong RAM.
-   */
-  logout() {
-    if (this._session) {
-      sodium.memzero(this._session.masterKey);
-      sodium.memzero(this._session.vaultKey);
-      sodium.memzero(this._session.privateKey);
-      sodium.memzero(this._session.signingPrivateKey);
-    }
-    this._session = null;
-  }
-
-  /**
-   * Doi mat khau. CHI can boc lai Vault Key va cac private key bang Master Key
-   * moi - KHONG dung den bat ky note nao, du co hang nghin note (day chinh la
-   * loi ich cua key wrapping 2 lop da thiet ke trong @secure-note/crypto/vault.js).
+   * Đăng xuất: hủy phiên ở server (D26) rồi xóa khóa khỏi bộ nhớ bằng
+   * sodium.memzero, thay vì chỉ gán null và chờ garbage collector — giảm thời
+   * gian khóa nhạy cảm còn nằm trong RAM.
    *
-   * Yeu cau nhap lai mat khau CU (khong chi dua vao session hien tai) de phong
-   * truong hop tab/trinh duyet dang dang nhap bi ai do muon loi dung, ho van
-   * phai biet mat khau that moi doi duoc.
+   * Khóa được xóa kể cả khi gọi server thất bại (mất mạng), vì xóa khóa cục bộ
+   * là việc quan trọng hơn.
+   */
+  async logout() {
+    try {
+      await this.transport.logout();
+    } finally {
+      if (this._session) {
+        sodium.memzero(this._session.masterKey);
+        sodium.memzero(this._session.vaultKey);
+        sodium.memzero(this._session.x25519PrivateKey);
+        sodium.memzero(this._session.ed25519PrivateKey);
+      }
+      this._session = null;
+    }
+  }
+
+  /**
+   * Đổi mật khẩu. CHỈ bọc lại Vault Key và hai private key bằng Master Key mới —
+   * KHÔNG đụng tới note nào, dù có hàng nghìn note. Đó chính là lợi ích của
+   * key wrapping hai lớp trong crypto/src/vault.js.
+   *
+   * Yêu cầu nhập lại mật khẩu CŨ (D25): server kiểm tra authKey cũ, nên người
+   * mượn được tab đang đăng nhập vẫn không đổi được mật khẩu.
    *
    * @param {string} oldPassword
    * @param {string} newPassword
@@ -198,31 +212,32 @@ export class SecureNoteClient {
     await ready();
     const session = this._requireSession();
 
-    const oldSaltB64 = await this.transport.getSalt(session.email);
-    const oldSalt = sodium.from_base64(oldSaltB64);
-    const { authKey: oldAuthKey } = await kdf.deriveKeysFromPassword(oldPassword, oldSalt);
-    await this.transport.login({ email: session.email, authKeyB64: sodium.to_base64(oldAuthKey) });
+    const { salt: oldSalt, kdfParams: oldKdfParams } = await this.transport.getSalt(session.email);
+    const { authKey: oldAuthKey } = await kdf.deriveKeysFromPassword(
+      oldPassword,
+      fromBase64(oldSalt),
+      oldKdfParams,
+    );
 
     const newSalt = kdf.generateSalt();
+    const kdfParams = { ...KDF_DEFAULTS };
     const { authKey: newAuthKey, masterKey: newMasterKey } = await kdf.deriveKeysFromPassword(
       newPassword,
       newSalt,
-    );
-
-    const wrappedVaultKey = await vault.wrapVaultKey(session.vaultKey, newMasterKey);
-    const wrappedPrivateKey = await sharing.wrapPrivateKey(session.privateKey, newMasterKey);
-    const wrappedSigningPrivateKey = await sharing.wrapPrivateKey(
-      session.signingPrivateKey,
-      newMasterKey,
+      kdfParams,
     );
 
     await this.transport.changePassword({
-      email: session.email,
-      saltB64: sodium.to_base64(newSalt),
-      authKeyB64: sodium.to_base64(newAuthKey),
-      wrappedVaultKey,
-      wrappedPrivateKey,
-      wrappedSigningPrivateKey,
+      oldAuthKey: toBase64(oldAuthKey),
+      salt: toBase64(newSalt),
+      kdfParams,
+      authKey: toBase64(newAuthKey),
+      wrappedVaultKey: await vault.wrapVaultKey(session.vaultKey, newMasterKey),
+      wrappedX25519PrivateKey: await sharing.wrapPrivateKey(session.x25519PrivateKey, newMasterKey),
+      wrappedEd25519PrivateKey: await sharing.wrapPrivateKey(
+        session.ed25519PrivateKey,
+        newMasterKey,
+      ),
     });
 
     sodium.memzero(session.masterKey);
@@ -232,147 +247,176 @@ export class SecureNoteClient {
   }
 
   /**
-   * Tao note moi.
-   * @param {string} text
-   * @returns {Promise<{noteId: string}>}
+   * Tạo note mới. Tiêu đề và nội dung được mã hóa RIÊNG bằng cùng một note key
+   * (D21), để API danh sách trả về tiêu đề mà không phải trả nội dung.
+   *
+   * @param {{title: string, content: string}} input
+   * @returns {Promise<{id: string, version: number, updatedAt: string}>}
    */
-  async createNote(text) {
+  async createNote({ title, content }) {
     await ready();
     const session = this._requireSession();
+    assertPlaintextSize(content);
 
+    // D17: id do client sinh vì nó sẽ nằm trong Associated Data của ciphertext.
+    const id = globalThis.crypto.randomUUID();
     const noteKey = vault.generateVaultKey();
-    const encryptedNote = await note.encryptNote(text, noteKey);
-    const wrappedNoteKeyForOwner = await vault.wrapVaultKey(noteKey, session.vaultKey);
 
-    const { noteId } = await this.transport.createNote({
-      ownerEmail: session.email,
-      nonce: encryptedNote.nonce,
-      ciphertext: encryptedNote.ciphertext,
-      wrappedNoteKeyForOwner,
-    });
+    const payload = {
+      id,
+      version: NOTE_VERSION_START,
+      encryptedTitle: await note.encryptNote(title, noteKey),
+      encryptedContent: await note.encryptNote(content, noteKey),
+      wrappedNoteKey: await vault.wrapVaultKey(noteKey, session.vaultKey),
+    };
+    sodium.memzero(noteKey);
 
-    return { noteId };
-  }
-
-  /** @returns {Promise<Array<{noteId: string, createdAt: number|string}>>} */
-  async listNotes() {
-    const session = this._requireSession();
-    return this.transport.listNotes(session.email);
+    return this.transport.createNote(payload);
   }
 
   /**
-   * Doc noi dung 1 note CUA CHINH MINH.
+   * Danh sách note của mình, tiêu đề đã giải mã sẵn. Nội dung KHÔNG được tải về
+   * ở đây — gọi readNote() khi người dùng thật sự mở một note.
+   *
+   * @returns {Promise<Array<{id: string, version: number, title: string, updatedAt: string}>>}
+   */
+  async listNotes() {
+    await ready();
+    const session = this._requireSession();
+    const items = await this.transport.listNotes();
+
+    return Promise.all(
+      items.map(async (item) => {
+        const noteKey = await vault.unwrapVaultKey(item.wrappedNoteKey, session.vaultKey);
+        const title = await note.decryptNote(item.encryptedTitle, noteKey);
+        sodium.memzero(noteKey);
+        return { id: item.id, version: item.version, title, updatedAt: item.updatedAt };
+      }),
+    );
+  }
+
+  /**
+   * Đọc một note: của chính mình, hoặc được người khác chia sẻ cho mình (D22 —
+   * cả hai đều đọc từ GET /api/notes/:id, server không sao chép ciphertext).
+   *
+   * Với note được chia sẻ, chữ ký Ed25519 của người gửi được xác minh TRƯỚC KHI
+   * giải mã; sai chữ ký thì ném lỗi và không trả về nội dung nào.
+   *
    * @param {string} noteId
-   * @returns {Promise<string>}
+   * @returns {Promise<{id: string, version: number, title: string, content: string,
+   *   updatedAt: string, sharedBy: string | null}>}
    */
   async readNote(noteId) {
     await ready();
     const session = this._requireSession();
-
     const record = await this.transport.getNote(noteId);
-    if (record.ownerEmail !== session.email) {
-      throw new Error(
-        'Ban khong phai chu note nay - dung readSharedNote() cho note duoc chia se toi ban',
+
+    let noteKey;
+    let sharedBy = null;
+    if (record.wrappedNoteKey) {
+      noteKey = await vault.unwrapVaultKey(record.wrappedNoteKey, session.vaultKey);
+    } else if (record.share) {
+      const senderKeys = await this.transport.getUserKeys(record.share.senderEmail);
+      noteKey = await sharing.unwrapNoteKeyFromSender(
+        record.share.sharePackage,
+        session.x25519PrivateKey,
+        fromBase64(senderKeys.ed25519PublicKey),
       );
+      sharedBy = record.share.senderEmail;
+    } else {
+      // Server đúng đắn luôn trả một trong hai. Thiếu cả hai là dấu hiệu server
+      // lỗi hoặc bị can thiệp — từ chối thay vì đoán.
+      throw new Error('Server không trả về khóa để mở note này, từ chối xử lý tiếp.');
     }
 
-    const noteKey = await vault.unwrapVaultKey(record.wrappedNoteKeyForOwner, session.vaultKey);
-    return note.decryptNote({ nonce: record.nonce, ciphertext: record.ciphertext }, noteKey);
+    const title = await note.decryptNote(record.encryptedTitle, noteKey);
+    const content = await note.decryptNote(record.encryptedContent, noteKey);
+    sodium.memzero(noteKey);
+
+    return {
+      id: record.id,
+      version: record.version,
+      title,
+      content,
+      updatedAt: record.updatedAt,
+      sharedBy,
+    };
   }
 
   /**
-   * Chia se 1 note CUA CHINH MINH cho nguoi khac qua email cua ho. Chi boc
-   * dung note key cua note nay, KHONG dua Vault Key.
+   * Chia sẻ một note của mình cho người khác. Chỉ bọc đúng note key của note
+   * này cho người nhận, KHÔNG bao giờ đưa Vault Key.
    *
    * @param {string} noteId
    * @param {string} recipientEmail
-   * @returns {Promise<{shareId: string}>}
+   * @returns {Promise<{id: string}>}
    */
   async shareNote(noteId, recipientEmail) {
     await ready();
     const session = this._requireSession();
-    const normalizedRecipient = recipientEmail.trim().toLowerCase();
+    const normalizedRecipient = normalizeEmail(recipientEmail);
 
     const record = await this.transport.getNote(noteId);
-    if (record.ownerEmail !== session.email) {
-      throw new Error('Ban khong phai chu note nay, khong the chia se');
+    if (!record.wrappedNoteKey) {
+      throw new Error('Bạn không phải chủ note này, không thể chia sẻ.');
     }
-
-    const noteKey = await vault.unwrapVaultKey(record.wrappedNoteKeyForOwner, session.vaultKey);
+    const noteKey = await vault.unwrapVaultKey(record.wrappedNoteKey, session.vaultKey);
 
     const recipientKeys = await this.transport.getUserKeys(normalizedRecipient);
-    const recipientPublicKey = sodium.from_base64(recipientKeys.publicKeyB64);
-
-    const wrapped = await sharing.wrapNoteKeyForRecipient(
+    const sharePackage = await sharing.wrapNoteKeyForRecipient(
       noteKey,
-      recipientPublicKey,
-      session.signingPrivateKey,
+      fromBase64(recipientKeys.x25519PublicKey),
+      session.ed25519PrivateKey,
     );
+    sodium.memzero(noteKey);
 
-    const { shareId } = await this.transport.shareNote({
-      noteId,
-      senderEmail: session.email,
+    return this.transport.shareNote(noteId, {
       recipientEmail: normalizedRecipient,
-      ...wrapped,
+      sharePackage,
     });
-
-    return { shareId };
-  }
-
-  /** @returns {Promise<Array<{shareId: string, noteId: string, senderEmail: string, createdAt: number|string}>>} */
-  async listSharedWithMe() {
-    const session = this._requireSession();
-    return this.transport.listSharedWithMe(session.email);
   }
 
   /**
-   * Doc noi dung 1 note duoc NGUOI KHAC chia se toi minh. Tu dong xac minh chu
-   * ky cua nguoi gui truoc khi giai ma - neu sai nguoi gui hoac goi tin bi sua
-   * doi thi ham nay se throw, khong tra ve noi dung.
+   * Các note người khác đã chia sẻ cho mình. Trả về tham chiếu; gọi readNote(noteId)
+   * để đọc nội dung.
    *
-   * @param {string} shareId
-   * @returns {Promise<string>}
+   * @returns {Promise<Array<{id: string, noteId: string, senderEmail: string, createdAt: string}>>}
    */
-  async readSharedNote(shareId) {
-    await ready();
-    const session = this._requireSession();
-
-    const share = await this.transport.getShare(shareId);
-    const senderKeys = await this.transport.getUserKeys(share.senderEmail);
-    const senderSigningPublicKey = sodium.from_base64(senderKeys.signingPublicKeyB64);
-
-    const noteKey = await sharing.unwrapNoteKeyFromSender(
-      {
-        ephemeralPublicKey: share.ephemeralPublicKey,
-        nonce: share.nonce,
-        ciphertext: share.ciphertext,
-        signature: share.signature,
-      },
-      session.privateKey,
-      senderSigningPublicKey,
-    );
-
-    return note.decryptNote({ nonce: share.noteNonce, ciphertext: share.noteCiphertext }, noteKey);
+  async listSharedWithMe() {
+    this._requireSession();
+    return this.transport.listSharedWithMe();
   }
 
   /**
-   * Lay fingerprint cua 1 user (theo email) de hien thi cho nguoi dung doi
-   * chieu thu cong TRUOC KHI chia se - phong ve chong server trao doi public
-   * key gia.
+   * Fingerprint khóa công khai của một người, để hai bên đối chiếu thủ công qua
+   * kênh khác (điện thoại, gặp mặt) TRƯỚC KHI chia sẻ — phòng trường hợp server
+   * tráo khóa công khai. Đây là lớp phòng vệ thủ công, không phải xác thực tự động.
    *
    * @param {string} email
-   * @returns {Promise<{email: string, encryptionKeyFingerprint: string, signingKeyFingerprint: string}>}
+   * @returns {Promise<{email: string, x25519Fingerprint: string, ed25519Fingerprint: string}>}
    */
   async getFingerprint(email) {
     await ready();
-    const normalizedEmail = email.trim().toLowerCase();
+    this._requireSession();
+    const normalizedEmail = normalizeEmail(email);
     const keys = await this.transport.getUserKeys(normalizedEmail);
     return {
       email: normalizedEmail,
-      encryptionKeyFingerprint: sharing.publicKeyFingerprint(sodium.from_base64(keys.publicKeyB64)),
-      signingKeyFingerprint: sharing.publicKeyFingerprint(
-        sodium.from_base64(keys.signingPublicKeyB64),
-      ),
+      x25519Fingerprint: sharing.publicKeyFingerprint(fromBase64(keys.x25519PublicKey)),
+      ed25519Fingerprint: sharing.publicKeyFingerprint(fromBase64(keys.ed25519PublicKey)),
     };
+  }
+}
+
+/**
+ * D28: chặn nội dung quá lớn NGAY Ở CLIENT, trước khi mã hóa — vừa báo lỗi rõ
+ * ràng cho người dùng, vừa không tốn công mã hóa thứ server sẽ từ chối.
+ */
+function assertPlaintextSize(content) {
+  const bytes = sodium.from_string(content).length;
+  if (bytes > LIMITS.MAX_NOTE_PLAINTEXT_BYTES) {
+    throw new Error(
+      `Nội dung note ${bytes} byte, vượt giới hạn ${LIMITS.MAX_NOTE_PLAINTEXT_BYTES} byte.`,
+    );
   }
 }

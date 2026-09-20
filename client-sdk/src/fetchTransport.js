@@ -1,61 +1,77 @@
 /**
  * fetchTransport.js
  * -----------------
- * Transport THAT dung fetch(), thay the memoryTransport.js khi backend that
- * da san sang. KHONG sua client.js - chi can doi noi khoi tao:
+ * Transport THẬT dùng fetch(), nói chuyện với server theo đúng `docs/API.md`.
+ * Đổi transport là đổi đúng một dòng ở nơi khởi tạo, client.js không phải sửa:
  *
- *   import { createMemoryTransport } from './memoryTransport.js';
- *   const client = new SecureNoteClient(createMemoryTransport());
+ *   const client = new SecureNoteClient(createMemoryTransport());   // tự test
+ *   const client = new SecureNoteClient(createFetchTransport());    // server thật
  *
- * thanh:
+ * Mọi response đều được kiểm tra bằng schema trong `@secure-notes/shared`
+ * (Value.Check, không dùng ajv vì ajv sinh code bằng new Function và bị CSP
+ * chặn — D06). Đây là phòng thủ chống "server độc hại": dùng CHUNG một bộ
+ * schema với server, nên client không thể vô tình chấp nhận hình dạng dữ liệu
+ * mà server không bao giờ được phép trả về.
  *
- *   import { createFetchTransport } from './fetchTransport.js';
- *   const client = new SecureNoteClient(createFetchTransport('https://api.diachi-that.com'));
- *
- * Moi response tu server deu duoc kiem tra hinh dang bang TypeBox (xem
- * schemas.js + assertSchema.js) TRUOC KHI tra ve cho client.js dung - day la
- * phong thu chong "server doc hai" tra ve du lieu sai dinh dang hoac co truong
- * la (vi du __proto__) da nhac trong khung do an.
- *
- * QUAN TRONG: dung { credentials: 'include' } de trinh duyet tu dong gui kem
- * cookie session (httpOnly) ma backend thiet lap luc dang nhap - KHONG tu tay
- * gan header Authorization/token o day.
+ * QUAN TRỌNG: dùng `credentials: 'include'` để trình duyệt tự gửi kèm cookie
+ * phiên (httpOnly) — KHÔNG tự gắn header Authorization hay đọc token bằng JS.
  */
 
+import { Value } from '@sinclair/typebox/value';
 import {
-  GetSaltResponseSchema,
-  LoginResponseSchema,
-  UserKeysResponseSchema,
-  CreateNoteResponseSchema,
-  NoteListResponseSchema,
-  NoteRecordSchema,
-  ShareResponseSchema,
-  SharedWithMeResponseSchema,
-  ShareRecordSchema,
-} from './schemas.js';
+  ErrorBody,
+  NoteListResponse,
+  NoteResponse,
+  NoteWriteResponse,
+  SaltResponse,
+  SelfAccountResponse,
+  ShareCreatedResponse,
+  ShareListResponse,
+  UserKeysResponse,
+} from '@secure-notes/shared';
 import { assertSchema } from './assertSchema.js';
+import { ApiError } from './apiError.js';
 
 /**
- * @param {string} baseUrl
+ * @param {string} [baseUrl] Mặc định rỗng: giao diện và API cùng origin
+ *   (Vite proxy khi dev, Caddy khi deploy — D07), nên đường dẫn tương đối là đủ.
  * @returns {import('./transportType.js').Transport}
  */
-export function createFetchTransport(baseUrl) {
+export function createFetchTransport(baseUrl = '') {
   async function callApi(method, path, body) {
-    const response = await fetch(baseUrl + path, {
+    const response = await fetch(`${baseUrl}/api${path}`, {
       method,
-      headers: body ? { 'Content-Type': 'application/json' } : undefined,
-      credentials: 'include', // gui kem cookie session httpOnly
-      body: body ? JSON.stringify(body) : undefined,
+      headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
+      credentials: 'include', // gửi kèm cookie phiên httpOnly
+      body: body === undefined ? undefined : JSON.stringify(body),
     });
 
-    if (!response.ok) {
-      const errorBody = await response.json().catch(() => ({}));
-      throw new Error(errorBody.message || `API loi: ${method} ${path} -> HTTP ${response.status}`);
+    // 204 hoặc 201 body rỗng (ví dụ POST /register theo D36): không có gì để đọc.
+    // Đọc dạng text rồi mới parse: khi có proxy hỏng hoặc trang lỗi HTML chen vào
+    // giữa đường, JSON.parse sẽ ném SyntaxError khó hiểu thay vì một lỗi nói rõ
+    // rằng phản hồi không phải JSON.
+    const raw = await response.text();
+    let data;
+    try {
+      data = raw === '' ? undefined : JSON.parse(raw);
+    } catch {
+      throw new ApiError(
+        'INTERNAL_ERROR',
+        `Phản hồi từ server không phải JSON (HTTP ${response.status}).`,
+      );
     }
 
-    // Mot so endpoint (vi du GET /users/:email/salt) co the tra ve chuoi
-    // thuan thay vi JSON - backend can thong nhat truoc, o day gia dinh JSON.
-    return response.json();
+    if (!response.ok) {
+      // Ngay cả thân lỗi cũng phải đúng định dạng { code, message } (D29);
+      // sai định dạng thì coi như server hỏng, không lấy chuỗi lạ ra hiển thị.
+      if (Value.Check(ErrorBody, data)) throw new ApiError(data.code, data.message);
+      throw new ApiError(
+        'INTERNAL_ERROR',
+        `Server trả lỗi không đúng định dạng (HTTP ${response.status}).`,
+      );
+    }
+
+    return data;
   }
 
   return {
@@ -65,58 +81,50 @@ export function createFetchTransport(baseUrl) {
 
     async getSalt(email) {
       const data = await callApi('GET', `/users/${encodeURIComponent(email)}/salt`);
-      assertSchema(GetSaltResponseSchema, data, 'GET /users/:email/salt');
-      return data.saltB64;
+      return assertSchema(SaltResponse, data, 'GET /api/users/:email/salt');
     },
 
-    async login({ email, authKeyB64 }) {
-      const data = await callApi('POST', '/login', { email, authKeyB64 });
-      return assertSchema(LoginResponseSchema, data, 'POST /login');
+    async login(payload) {
+      const data = await callApi('POST', '/login', payload);
+      return assertSchema(SelfAccountResponse, data, 'POST /api/login');
+    },
+
+    async logout() {
+      await callApi('POST', '/logout');
     },
 
     async changePassword(payload) {
-      return callApi('POST', '/change-password', payload);
+      await callApi('POST', '/change-password', payload);
     },
 
     async getUserKeys(email) {
       const data = await callApi('GET', `/users/${encodeURIComponent(email)}/keys`);
-      return assertSchema(UserKeysResponseSchema, data, 'GET /users/:email/keys');
+      return assertSchema(UserKeysResponse, data, 'GET /api/users/:email/keys');
     },
 
-    async createNote({ ownerEmail, nonce, ciphertext, wrappedNoteKeyForOwner }) {
-      const data = await callApi('POST', '/notes', {
-        ownerEmail,
-        nonce,
-        ciphertext,
-        wrappedNoteKeyForOwner,
-      });
-      return assertSchema(CreateNoteResponseSchema, data, 'POST /notes');
+    async createNote(payload) {
+      const data = await callApi('POST', '/notes', payload);
+      return assertSchema(NoteWriteResponse, data, 'POST /api/notes');
     },
 
-    async listNotes(ownerEmail) {
-      const data = await callApi('GET', `/notes?owner=${encodeURIComponent(ownerEmail)}`);
-      return assertSchema(NoteListResponseSchema, data, 'GET /notes');
+    async listNotes() {
+      const data = await callApi('GET', '/notes');
+      return assertSchema(NoteListResponse, data, 'GET /api/notes');
     },
 
     async getNote(noteId) {
       const data = await callApi('GET', `/notes/${encodeURIComponent(noteId)}`);
-      return assertSchema(NoteRecordSchema, data, 'GET /notes/:id');
+      return assertSchema(NoteResponse, data, 'GET /api/notes/:id');
     },
 
-    async shareNote(payload) {
-      const { noteId, ...rest } = payload;
-      const data = await callApi('POST', `/notes/${encodeURIComponent(noteId)}/share`, rest);
-      return assertSchema(ShareResponseSchema, data, 'POST /notes/:id/share');
+    async shareNote(noteId, payload) {
+      const data = await callApi('POST', `/notes/${encodeURIComponent(noteId)}/shares`, payload);
+      return assertSchema(ShareCreatedResponse, data, 'POST /api/notes/:id/shares');
     },
 
-    async listSharedWithMe(recipientEmail) {
-      const data = await callApi('GET', `/shares?recipient=${encodeURIComponent(recipientEmail)}`);
-      return assertSchema(SharedWithMeResponseSchema, data, 'GET /shares');
-    },
-
-    async getShare(shareId) {
-      const data = await callApi('GET', `/shares/${encodeURIComponent(shareId)}`);
-      return assertSchema(ShareRecordSchema, data, 'GET /shares/:id');
+    async listSharedWithMe() {
+      const data = await callApi('GET', '/shares');
+      return assertSchema(ShareListResponse, data, 'GET /api/shares');
     },
   };
 }

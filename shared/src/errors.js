@@ -11,6 +11,9 @@ export const ERROR_CODES = Object.freeze({
   // để không xác nhận note đó có tồn tại.
   NOT_FOUND: { status: 404, message: 'Không tìm thấy.' },
   EMAIL_TAKEN: { status: 409, message: 'Email này đã được đăng ký.' },
+  // D17: noteId do client sinh, server từ chối id trùng. Về lý thuyết lộ việc
+  // "id này đã tồn tại", nhưng UUID v4 không đoán được nên không dùng để dò được gì.
+  NOTE_ID_TAKEN: { status: 409, message: 'Note id này đã tồn tại, hãy thử lại.' },
   VERSION_CONFLICT: { status: 409, message: 'Note đã bị thay đổi ở nơi khác, hãy tải lại.' },
   SHARE_REVOKED: { status: 410, message: 'Quyền truy cập note này đã bị thu hồi.' },
   PAYLOAD_TOO_LARGE: { status: 413, message: 'Dữ liệu vượt quá kích thước cho phép.' },

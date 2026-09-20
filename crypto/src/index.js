@@ -1,16 +1,8 @@
 /**
  * [Lâm] Điểm export duy nhất của module crypto.
  *
- * Việc cần làm khi chuyển code cũ vào đây (xem README, mục "Chuyển code của Lâm"):
- *   src/kdf.js, src/vault.js, src/note.js, src/sharing.js  ->  crypto/src/
- *   test/kdf|vault|note|sharing.test.js                    ->  crypto/test/
- *   benchmark/argon2-benchmark.js                          ->  crypto/benchmark/
- *
- * Rồi đổi require(...) -> import, module.exports -> export, và export lại ở đây:
- *   export * from './kdf.js';
- *   export * from './vault.js';
- *   export * from './note.js';
- *   export * from './sharing.js';
+ * Module này không gọi mạng, không biết server tồn tại, không biết gì về giao
+ * diện — ranh giới đó được kiểm tra tự động bằng `pnpm depcheck`.
  */
 import _sodium from 'libsodium-wrappers-sumo';
 
@@ -27,3 +19,6 @@ export * as kdf from './kdf.js';
 export * as vault from './vault.js';
 export * as note from './note.js';
 export * as sharing from './sharing.js';
+
+// Quy ước mã hóa nhị phân (D11) — client-sdk dùng lại để khỏi tự chọn biến thể base64.
+export { toBase64, fromBase64 } from './base64.js';

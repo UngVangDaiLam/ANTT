@@ -12,6 +12,7 @@
  */
 
 import sodium from 'libsodium-wrappers-sumo';
+import { toBase64, fromBase64 } from './base64.js';
 
 /**
  * @typedef {{nonce: string, ciphertext: string}} EncryptedPayload
@@ -40,8 +41,8 @@ export async function encryptNote(plaintext, key) {
     key,
   );
   return {
-    nonce: sodium.to_base64(nonce),
-    ciphertext: sodium.to_base64(ciphertext),
+    nonce: toBase64(nonce),
+    ciphertext: toBase64(ciphertext),
   };
 }
 
@@ -55,8 +56,8 @@ export async function encryptNote(plaintext, key) {
  */
 export async function decryptNote(encryptedNote, key) {
   await ready();
-  const nonce = sodium.from_base64(encryptedNote.nonce);
-  const ciphertext = sodium.from_base64(encryptedNote.ciphertext);
+  const nonce = fromBase64(encryptedNote.nonce);
+  const ciphertext = fromBase64(encryptedNote.ciphertext);
   const plaintextBytes = sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(
     null,
     ciphertext,

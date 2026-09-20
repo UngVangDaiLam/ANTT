@@ -1,188 +1,279 @@
 import { describe, test, expect } from 'vitest';
+import { KDF_DEFAULTS, LIMITS } from '@secure-notes/shared';
 import { SecureNoteClient } from '../src/client.js';
-import { createMemoryTransport } from '../src/memoryTransport.js';
+import { createMemoryServer, createMemoryTransport } from '../src/memoryTransport.js';
 
-describe('SecureNoteClient (client SDK cap cao - thu nhu giao dien web se dung)', () => {
-  test('dang ky, tao note, tu doc lai note cua chinh minh', async () => {
-    const transport = createMemoryTransport();
-    const alice = new SecureNoteClient(transport);
+/** Một người dùng = một trình duyệt = một kết nối riêng tới server giả. */
+function newClient(server) {
+  return new SecureNoteClient(server.connect());
+}
 
+describe('SecureNoteClient (giống hệt cách giao diện web sẽ dùng)', () => {
+  test('đăng ký, tạo note, tự đọc lại note của chính mình', async () => {
+    const alice = newClient(createMemoryServer());
     await alice.register('alice@example.com', 'mat-khau-cua-alice');
-    const { noteId } = await alice.createNote('Ghi chu bi mat cua Alice');
 
-    const text = await alice.readNote(noteId);
-    expect(text).toBe('Ghi chu bi mat cua Alice');
+    const { id } = await alice.createNote({
+      title: 'Bí mật',
+      content: 'Ghi chú bí mật của Alice',
+    });
+    const note = await alice.readNote(id);
+
+    expect(note.title).toBe('Bí mật');
+    expect(note.content).toBe('Ghi chú bí mật của Alice');
+    expect(note.version).toBe(1);
+    expect(note.sharedBy).toBeNull();
   });
 
-  test('dang xuat roi dang nhap lai van doc duoc note cu', async () => {
-    const transport = createMemoryTransport();
-    const alice1 = new SecureNoteClient(transport);
+  test('danh sách note trả tiêu đề đã giải mã và KHÔNG kèm nội dung', async () => {
+    const alice = newClient(createMemoryServer());
+    await alice.register('alice-list@example.com', 'mk');
+    await alice.createNote({ title: 'Việc cần làm', content: 'Nội dung không được lộ ở đây' });
+
+    const list = await alice.listNotes();
+
+    expect(list).toHaveLength(1);
+    expect(list[0].title).toBe('Việc cần làm');
+    expect(Object.keys(list[0])).toEqual(['id', 'version', 'title', 'updatedAt']);
+  });
+
+  test('đăng xuất rồi đăng nhập lại vẫn đọc được note cũ', async () => {
+    const server = createMemoryServer();
+    const alice1 = newClient(server);
     await alice1.register('alice2@example.com', 'mat-khau-cua-alice');
-    const { noteId } = await alice1.createNote('Note can nho');
-    alice1.logout();
+    const { id } = await alice1.createNote({ title: 'Cần nhớ', content: 'Note cần nhớ' });
+    await alice1.logout();
     expect(alice1.isLoggedIn()).toBe(false);
 
-    const alice2 = new SecureNoteClient(transport);
+    const alice2 = newClient(server);
     await alice2.login('alice2@example.com', 'mat-khau-cua-alice');
-    const text = await alice2.readNote(noteId);
-    expect(text).toBe('Note can nho');
+
+    expect((await alice2.readNote(id)).content).toBe('Note cần nhớ');
   });
 
-  test('sai mat khau -> dang nhap phai that bai', async () => {
-    const transport = createMemoryTransport();
-    const alice = new SecureNoteClient(transport);
+  test('sai mật khẩu thì đăng nhập phải thất bại', async () => {
+    const server = createMemoryServer();
+    const alice = newClient(server);
     await alice.register('alice3@example.com', 'mat-khau-dung');
-    alice.logout();
+    await alice.logout();
 
-    const attacker = new SecureNoteClient(transport);
-    await expect(attacker.login('alice3@example.com', 'mat-khau-sai')).rejects.toThrow();
+    const attacker = newClient(server);
+    await expect(attacker.login('alice3@example.com', 'mat-khau-sai')).rejects.toMatchObject({
+      code: 'INVALID_CREDENTIALS',
+    });
   });
 
-  test('chia se dung 1 note cho Bob, Bob doc duoc dung noi dung', async () => {
-    const transport = createMemoryTransport();
-    const alice = new SecureNoteClient(transport);
-    const bob = new SecureNoteClient(transport);
+  test('đăng ký trùng email bị từ chối (D35)', async () => {
+    const server = createMemoryServer();
+    await newClient(server).register('trung@example.com', 'mk-1');
 
+    await expect(newClient(server).register('TRUNG@example.com', 'mk-2')).rejects.toMatchObject({
+      code: 'EMAIL_TAKEN',
+    });
+  });
+
+  test('chia sẻ một note cho Bob, Bob đọc được đúng nội dung', async () => {
+    const server = createMemoryServer();
+    const alice = newClient(server);
+    const bob = newClient(server);
     await alice.register('alice4@example.com', 'mk-alice');
     await bob.register('bob4@example.com', 'mk-bob');
 
-    const { noteId } = await alice.createNote('Danh sach mua sam');
-    const { shareId } = await alice.shareNote(noteId, 'bob4@example.com');
+    const { id } = await alice.createNote({ title: 'Mua sắm', content: 'Danh sách mua sắm' });
+    await alice.shareNote(id, 'bob4@example.com');
 
-    const sharedList = await bob.listSharedWithMe();
-    expect(sharedList.some((s) => s.shareId === shareId)).toBe(true);
+    const shared = await bob.listSharedWithMe();
+    expect(shared).toHaveLength(1);
+    expect(shared[0].noteId).toBe(id);
 
-    const text = await bob.readSharedNote(shareId);
-    expect(text).toBe('Danh sach mua sam');
+    // D22: Bob đọc chính note gốc qua noteId, server không sao chép ciphertext.
+    const note = await bob.readNote(id);
+    expect(note.content).toBe('Danh sách mua sắm');
+    expect(note.sharedBy).toBe('alice4@example.com');
   });
 
-  test('Bob KHONG doc duoc note khac cua Alice ma khong duoc chia se (khong dung readNote, cung khong co shareId)', async () => {
-    const transport = createMemoryTransport();
-    const alice = new SecureNoteClient(transport);
-    const bob = new SecureNoteClient(transport);
-
+  test('Bob KHÔNG đọc được note không được chia sẻ, và nhận NOT_FOUND chứ không phải FORBIDDEN (D30)', async () => {
+    const server = createMemoryServer();
+    const alice = newClient(server);
+    const bob = newClient(server);
     await alice.register('alice5@example.com', 'mk-alice');
     await bob.register('bob5@example.com', 'mk-bob');
 
-    const noteBiMat = await alice.createNote('TUYET MAT - khong chia se');
-    await alice.createNote('Note cong khai hon');
+    const biMat = await alice.createNote({ title: 'Tuyệt mật', content: 'Không chia sẻ' });
 
-    await expect(bob.readNote(noteBiMat.noteId)).rejects.toThrow('Ban khong phai chu note nay');
-
-    const sharedList = await bob.listSharedWithMe();
-    expect(sharedList.length).toBe(0);
+    await expect(bob.readNote(biMat.id)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(await bob.listSharedWithMe()).toHaveLength(0);
   });
 
-  test('nguoi thu 3 (khong phai nguoi nhan) khong the doc duoc goi chia se', async () => {
-    const transport = createMemoryTransport();
-    const alice = new SecureNoteClient(transport);
-    const bob = new SecureNoteClient(transport);
-    const eve = new SecureNoteClient(transport);
-
+  test('người thứ ba không đọc được note đã chia sẻ cho người khác', async () => {
+    const server = createMemoryServer();
+    const alice = newClient(server);
+    const bob = newClient(server);
+    const eve = newClient(server);
     await alice.register('alice6@example.com', 'mk-alice');
     await bob.register('bob6@example.com', 'mk-bob');
     await eve.register('eve6@example.com', 'mk-eve');
 
-    const { noteId } = await alice.createNote('Chi danh cho Bob');
-    const { shareId } = await alice.shareNote(noteId, 'bob6@example.com');
+    const { id } = await alice.createNote({ title: 'Riêng Bob', content: 'Chỉ dành cho Bob' });
+    await alice.shareNote(id, 'bob6@example.com');
 
-    await expect(eve.readSharedNote(shareId)).rejects.toBeTruthy();
+    await expect(eve.readNote(id)).rejects.toMatchObject({ code: 'NOT_FOUND' });
   });
 
-  test('getFingerprint tra ve fingerprint deterministic cho 1 email', async () => {
-    const transport = createMemoryTransport();
-    const alice = new SecureNoteClient(transport);
-    const bob = new SecureNoteClient(transport);
+  test('không thể chia sẻ note của người khác', async () => {
+    const server = createMemoryServer();
+    const alice = newClient(server);
+    const eve = newClient(server);
+    await alice.register('alice14@example.com', 'mk-alice');
+    await eve.register('eve14@example.com', 'mk-eve');
+
+    const { id } = await alice.createNote({ title: 'Của Alice', content: 'Của riêng Alice' });
+
+    await expect(eve.shareNote(id, 'eve14@example.com')).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+  });
+
+  test('fingerprint của cùng một người là như nhau dù ai tra cứu', async () => {
+    const server = createMemoryServer();
+    const alice = newClient(server);
+    const bob = newClient(server);
     await alice.register('alice7@example.com', 'mk-alice');
     await bob.register('bob7@example.com', 'mk-bob');
 
     const fp1 = await alice.getFingerprint('bob7@example.com');
     const fp2 = await bob.getFingerprint('bob7@example.com');
 
-    expect(fp1.encryptionKeyFingerprint).toBe(fp2.encryptionKeyFingerprint);
-    expect(fp1.signingKeyFingerprint).toBe(fp2.signingKeyFingerprint);
+    expect(fp1.x25519Fingerprint).toBe(fp2.x25519Fingerprint);
+    expect(fp1.ed25519Fingerprint).toBe(fp2.ed25519Fingerprint);
+    // Hai cặp khóa tách biệt nhau thì fingerprint cũng phải khác nhau.
+    expect(fp1.x25519Fingerprint).not.toBe(fp1.ed25519Fingerprint);
   });
 
-  test('goi ham can dang nhap ma chua dang nhap -> throw ro rang', async () => {
-    const transport = createMemoryTransport();
-    const client = new SecureNoteClient(transport);
-    await expect(client.createNote('abc')).rejects.toThrow('Chua dang nhap');
+  test('gọi hàm cần đăng nhập khi chưa đăng nhập thì báo lỗi rõ ràng', async () => {
+    const client = new SecureNoteClient(createMemoryTransport());
+    await expect(client.createNote({ title: 'a', content: 'b' })).rejects.toThrow('Chưa đăng nhập');
   });
 
-  test('doi mat khau thanh cong - dang nhap lai bang mat khau moi van doc duoc note cu', async () => {
-    const transport = createMemoryTransport();
-    const alice = new SecureNoteClient(transport);
+  test('đổi mật khẩu xong, đăng nhập bằng mật khẩu mới vẫn đọc được note cũ', async () => {
+    const server = createMemoryServer();
+    const alice = newClient(server);
     await alice.register('alice8@example.com', 'mat-khau-cu');
-    const { noteId } = await alice.createNote('Ghi chu truoc khi doi mat khau');
+    const { id } = await alice.createNote({ title: 'Trước', content: 'Ghi chú trước khi đổi' });
 
     await alice.changePassword('mat-khau-cu', 'mat-khau-moi');
+    await alice.logout();
 
-    alice.logout();
-    const alice2 = new SecureNoteClient(transport);
+    const alice2 = newClient(server);
     await alice2.login('alice8@example.com', 'mat-khau-moi');
-    const text = await alice2.readNote(noteId);
-    expect(text).toBe('Ghi chu truoc khi doi mat khau');
+    expect((await alice2.readNote(id)).content).toBe('Ghi chú trước khi đổi');
   });
 
-  test('doi mat khau xong - mat khau cu khong con dung nua', async () => {
-    const transport = createMemoryTransport();
-    const alice = new SecureNoteClient(transport);
+  test('đổi mật khẩu xong, mật khẩu cũ không còn dùng được', async () => {
+    const server = createMemoryServer();
+    const alice = newClient(server);
     await alice.register('alice9@example.com', 'mat-khau-cu');
     await alice.changePassword('mat-khau-cu', 'mat-khau-moi');
-    alice.logout();
+    await alice.logout();
 
-    const attacker = new SecureNoteClient(transport);
-    await expect(attacker.login('alice9@example.com', 'mat-khau-cu')).rejects.toThrow();
+    await expect(newClient(server).login('alice9@example.com', 'mat-khau-cu')).rejects.toThrow();
   });
 
-  test('doi mat khau voi sai mat khau cu -> tu choi, khong doi gi ca', async () => {
-    const transport = createMemoryTransport();
-    const alice = new SecureNoteClient(transport);
+  test('đổi mật khẩu với mật khẩu cũ sai thì bị từ chối và không đổi gì cả', async () => {
+    const server = createMemoryServer();
+    const alice = newClient(server);
     await alice.register('alice10@example.com', 'mat-khau-dung');
 
-    await expect(alice.changePassword('mat-khau-sai', 'mat-khau-moi')).rejects.toThrow();
+    await expect(alice.changePassword('mat-khau-sai', 'mat-khau-moi')).rejects.toMatchObject({
+      code: 'INVALID_CREDENTIALS',
+    });
 
-    alice.logout();
-    const alice2 = new SecureNoteClient(transport);
+    await alice.logout();
+    const alice2 = newClient(server);
     await alice2.login('alice10@example.com', 'mat-khau-dung');
     expect(alice2.isLoggedIn()).toBe(true);
   });
 
-  test('chia se van hoat dong binh thuong sau khi doi mat khau (private key duoc wrap lai dung)', async () => {
-    const transport = createMemoryTransport();
-    const alice = new SecureNoteClient(transport);
-    const bob = new SecureNoteClient(transport);
+  test('chia sẻ vẫn hoạt động sau khi đổi mật khẩu (private key được bọc lại đúng)', async () => {
+    const server = createMemoryServer();
+    const alice = newClient(server);
+    const bob = newClient(server);
     await alice.register('alice11@example.com', 'mat-khau-cu');
     await bob.register('bob11@example.com', 'mk-bob');
 
-    const { noteId } = await alice.createNote('Note se duoc chia se sau khi doi mat khau');
+    const { id } = await alice.createNote({ title: 'Sẽ chia sẻ', content: 'Nội dung chia sẻ' });
     await alice.changePassword('mat-khau-cu', 'mat-khau-moi');
+    await alice.shareNote(id, 'bob11@example.com');
 
-    const { shareId } = await alice.shareNote(noteId, 'bob11@example.com');
-    const text = await bob.readSharedNote(shareId);
-    expect(text).toBe('Note se duoc chia se sau khi doi mat khau');
+    expect((await bob.readNote(id)).content).toBe('Nội dung chia sẻ');
   });
 
-  test('email khong phan biet hoa/thuong va khoang trang (chuan hoa truoc khi gui)', async () => {
-    const transport = createMemoryTransport();
-    const alice = new SecureNoteClient(transport);
+  test('email không phân biệt hoa/thường và khoảng trắng hai đầu', async () => {
+    const server = createMemoryServer();
+    const alice = newClient(server);
     await alice.register('  Alice12@Example.com  ', 'mat-khau-cua-alice');
     expect(alice.currentUserEmail()).toBe('alice12@example.com');
-    alice.logout();
+    await alice.logout();
 
-    const alice2 = new SecureNoteClient(transport);
+    const alice2 = newClient(server);
     await alice2.login('ALICE12@EXAMPLE.COM', 'mat-khau-cua-alice');
     expect(alice2.isLoggedIn()).toBe(true);
   });
 
-  test('logout() xoa khoa khoi bo nho (memzero) - khoa cu tro thanh toan so 0', async () => {
-    const transport = createMemoryTransport();
-    const alice = new SecureNoteClient(transport);
+  test('logout() xóa khóa khỏi bộ nhớ (memzero) - khóa cũ thành toàn số 0', async () => {
+    const alice = newClient(createMemoryServer());
     await alice.register('alice13@example.com', 'mat-khau-cua-alice');
     const masterKeyRef = alice._session.masterKey;
     expect(masterKeyRef.some((byte) => byte !== 0)).toBe(true);
 
-    alice.logout();
+    await alice.logout();
     expect(masterKeyRef.every((byte) => byte === 0)).toBe(true);
+  });
+
+  test('nội dung vượt giới hạn bị chặn ngay ở client, không gửi lên server (D28)', async () => {
+    const alice = newClient(createMemoryServer());
+    await alice.register('alice15@example.com', 'mk');
+
+    const quaDai = 'a'.repeat(LIMITS.MAX_NOTE_PLAINTEXT_BYTES + 1);
+    await expect(alice.createNote({ title: 'To quá', content: quaDai })).rejects.toThrow(
+      'vượt giới hạn',
+    );
+    expect(await alice.listNotes()).toHaveLength(0);
+  });
+});
+
+describe('memoryTransport là bản kiểm tra hợp đồng API, không chỉ là kho dữ liệu giả', () => {
+  test('payload dùng tên trường cũ (saltB64, publicKeyB64...) bị từ chối - D34', async () => {
+    const transport = createMemoryTransport();
+
+    await expect(
+      transport.register({
+        email: 'cu@example.com',
+        saltB64: 'AAAAAAAAAAAAAAAAAAAAAA',
+        authKeyB64: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+        wrappedVaultKey: { nonce: 'a', ciphertext: 'b' },
+        publicKeyB64: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+        wrappedPrivateKey: { nonce: 'a', ciphertext: 'b' },
+        signingPublicKeyB64: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+        wrappedSigningPrivateKey: { nonce: 'a', ciphertext: 'b' },
+      }),
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+  });
+
+  test('thao tác cần đăng nhập mà chưa có phiên thì trả UNAUTHENTICATED (D16)', async () => {
+    const transport = createMemoryTransport();
+    await expect(transport.listNotes()).rejects.toMatchObject({ code: 'UNAUTHENTICATED' });
+  });
+
+  test('email chưa đăng ký vẫn nhận được salt, cố định theo email (D15)', async () => {
+    const transport = createMemoryTransport();
+
+    const lan1 = await transport.getSalt('khong-ton-tai@example.com');
+    const lan2 = await transport.getSalt('KHONG-TON-TAI@example.com');
+    const khac = await transport.getSalt('nguoi-khac@example.com');
+
+    expect(lan1.salt).toBe(lan2.salt);
+    expect(lan1.salt).not.toBe(khac.salt);
+    expect(lan1.kdfParams).toEqual({ ...KDF_DEFAULTS });
   });
 });

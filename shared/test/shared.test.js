@@ -4,7 +4,12 @@ import {
   AppError,
   Base64UrlBytes,
   Email,
+  IsoDateTime,
+  NoteListItem,
+  NoteResponse,
+  NormalizedEmail,
   RegisterRequest,
+  SaltResponse,
   Sealed,
   Uuid,
   normalizeEmail,
@@ -62,5 +67,70 @@ describe('shared', () => {
     };
     expect(Value.Check(RegisterRequest, body)).toBe(true);
     expect(Value.Check(RegisterRequest, { ...body, isAdmin: true })).toBe(false);
+  });
+  test('NormalizedEmail từ chối email chưa chuẩn hóa (dùng cho response)', () => {
+    expect(Value.Check(NormalizedEmail, 'lam@example.com')).toBe(true);
+    expect(Value.Check(NormalizedEmail, ' lam@example.com ')).toBe(false);
+  });
+
+  test('IsoDateTime chỉ nhận mốc thời gian ISO-8601 UTC', () => {
+    expect(Value.Check(IsoDateTime, new Date().toISOString())).toBe(true);
+    expect(Value.Check(IsoDateTime, '20/09/2026')).toBe(false);
+    expect(Value.Check(IsoDateTime, Date.now())).toBe(false);
+  });
+
+  test('SaltResponse: salt đúng 16 byte và luôn kèm kdfParams (D13)', () => {
+    const salt = Buffer.alloc(16, 3).toString('base64url');
+    const kdfParams = { opslimit: 3, memlimit: 64 * 1024 * 1024 };
+    expect(Value.Check(SaltResponse, { salt, kdfParams })).toBe(true);
+    // Thiếu kdfParams thì client sẽ đoán tham số Argon2id -> dẫn xuất sai khóa.
+    expect(Value.Check(SaltResponse, { salt })).toBe(false);
+    expect(Value.Check(SaltResponse, { salt: 'ngan-qua', kdfParams })).toBe(false);
+  });
+
+  test('NoteResponse: chủ note nhận wrappedNoteKey, người được chia sẻ nhận share (D22)', () => {
+    const b = (n) => Buffer.alloc(n, 1).toString('base64url');
+    const sealed = { nonce: b(24), ciphertext: b(48) };
+    const base = {
+      id: crypto.randomUUID(),
+      version: 1,
+      encryptedTitle: sealed,
+      encryptedContent: sealed,
+      updatedAt: new Date().toISOString(),
+    };
+    expect(Value.Check(NoteResponse, { ...base, wrappedNoteKey: sealed })).toBe(true);
+    expect(
+      Value.Check(NoteResponse, {
+        ...base,
+        share: {
+          senderEmail: 'lam@example.com',
+          sharePackage: {
+            ephemeralPublicKey: b(32),
+            nonce: b(24),
+            ciphertext: b(48),
+            signature: b(64),
+          },
+        },
+      }),
+    ).toBe(true);
+    // Nội dung note KHÔNG bao giờ được trả dạng thô, dù server có cố gửi kèm.
+    expect(Value.Check(NoteResponse, { ...base, wrappedNoteKey: sealed, plaintext: 'lo' })).toBe(
+      false,
+    );
+    expect(Value.Check(NoteResponse, { ...base, wrappedNoteKey: sealed, version: 0 })).toBe(false);
+  });
+
+  test('NoteListItem có wrappedNoteKey nhưng KHÔNG có nội dung (D21, D41)', () => {
+    const b = (n) => Buffer.alloc(n, 1).toString('base64url');
+    const sealed = { nonce: b(24), ciphertext: b(48) };
+    const item = {
+      id: crypto.randomUUID(),
+      version: 1,
+      encryptedTitle: sealed,
+      wrappedNoteKey: sealed,
+      updatedAt: new Date().toISOString(),
+    };
+    expect(Value.Check(NoteListItem, item)).toBe(true);
+    expect(Value.Check(NoteListItem, { ...item, encryptedContent: sealed })).toBe(false);
   });
 });
