@@ -17,7 +17,8 @@ trung chuyển dữ liệu đã mã hóa.
 
 - JavaScript + ESM (`import`/`export`), không TypeScript. Thêm JSDoc cho hàm công khai.
 - Ranh giới: `server/` không import `crypto/`, `client-sdk/` hay libsodium; `web/` chỉ import `client-sdk/`;
-  `crypto/` không gọi mạng. Kiểm tra bằng `pnpm depcheck`.
+  `crypto/` không gọi mạng; `integration/` (chỉ chứa test) là nơi duy nhất được dùng cả `client-sdk/` lẫn
+  `server/`, và không ai được import ngược vào nó. Kiểm tra bằng `pnpm depcheck`.
 - Hằng số chỉ đặt trong `shared/src/config.js`. Mã lỗi trong `shared/src/errors.js`, định dạng `{ code, message }`.
 - Server lấy danh tính từ session, không tin email hay id người dùng do client gửi. Kiểm tra quyền trên mọi route;
   note không thuộc về người gọi trả `NOT_FOUND`.

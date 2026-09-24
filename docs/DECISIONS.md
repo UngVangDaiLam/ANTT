@@ -108,3 +108,96 @@ nếu đổi ý thì ghi quyết định mới thay thế.
   nên chỉ cần một chỗ lỡ dùng `base64_variants.ORIGINAL` là server từ chối request mà không rõ vì
   sao. Nay `crypto/` và `client-sdk/` đều đi qua `toBase64`/`fromBase64`, biến quy ước ngầm thành
   quy ước tường minh ở đúng một chỗ.
+
+## Phiên đăng nhập
+
+- **D43. Phiên là token tham chiếu ngẫu nhiên 256 bit trong cookie `__Host-sid`; DB chỉ lưu SHA-256.**
+  Cookie `httpOnly`, `Secure`, `SameSite=Strict`, `Path=/`, không có `Domain`; tiền tố `__Host-` để
+  subdomain khác không ghi đè được (ASVS 3.3.1). `Session.id` là SHA-256 dạng hex của token, nên lộ
+  database không dựng lại được cookie. Dùng SHA-256 thường chứ không băm chậm vì token đã có 256 bit
+  ngẫu nhiên, không đoán được. Phiên hết hạn **tuyệt đối** sau `SESSION.TTL_MS` (24 giờ) tính từ lúc
+  đăng nhập, không tự gia hạn: đơn giản, và chặn trần thiệt hại nếu cookie bị lộ. `lastSeenAt` chỉ để
+  hiển thị danh sách thiết bị, được cập nhật tối đa mỗi `SESSION.TOUCH_INTERVAL_MS` để không ghi DB
+  ở mọi request.
+- **D44. Mỗi lần đăng nhập cấp token mới và hủy token cũ mà client đang mang theo** (ASVS 7.2.4).
+  Chỉ `POST /api/login` tạo phiên (D36), nên đây là chỗ duy nhất cần làm đúng.
+- **D45. `/login` không phân biệt "email không tồn tại" với "sai mật khẩu".** Cùng mã `INVALID_CREDENTIALS`,
+  cùng thông điệp, và luôn chạy phép so sánh hằng thời gian kể cả khi không có tài khoản. Lịch sử
+  đăng nhập vẫn ghi cả hai trường hợp (`userId = null` khi email lạ). `GET /users/:email/salt` nay
+  thật sự trả salt giả (D15). Giới hạn còn lại: rate limit mới theo IP, chưa theo từng tài khoản.
+- **D46. `TRUST_PROXY` mặc định tắt.** Sau Caddy phải bật để `request.ip` lấy từ `X-Forwarded-For`, nếu
+  không mọi request trông như đến từ IP của Caddy và rate limit gộp cả thế giới vào một hàng đợi.
+  Nhưng bật khi KHÔNG có proxy thì client tự khai IP giả được, phá luôn rate limit, nên không bật mặc định.
+
+## Note, chia sẻ và đổi mật khẩu
+
+- **D47. Xác thực chạy ở `onRequest`, không phải `preHandler`.** Fastify parse và validate body TRƯỚC
+  `preHandler`, nên nếu xác thực đặt ở đó thì người chưa đăng nhập vẫn bắt được server đọc tới 1 MB
+  body và chạy validate, và nhận `400` thay vì `401`. Ở `onRequest`, request không có phiên bị chặn ngay
+  từ đầu và luôn nhận `401`.
+- **D48. `KdfParams` có sàn và trần, kiểm tra ở cả server lẫn client.** Sàn là mức tối thiểu OWASP khuyến
+  nghị cho Argon2id (t = 2, m = 19 MiB), trần chặn tham số khổng lồ (t = 16, m = 1 GiB). Lý do chính là
+  **server độc hại**: client dẫn xuất khóa bằng tham số do server trả trong `/salt`; nếu không có sàn,
+  server trả `opslimit = 1, memlimit = 8 KB` rồi mang `authKey` nhận được đi dò mật khẩu offline gần như
+  tức thì. Client kiểm tra response bằng đúng schema này nên từ chối tham số dưới sàn. Trần chặn server
+  làm treo hoặc sập tab bằng tham số khổng lồ. **Giới hạn còn lại:** server vẫn trả được đúng mức sàn,
+  yếu hơn `KDF_DEFAULTS`, mà client không phân biệt được với tài khoản cũ hợp lệ (D13) — đó là đánh đổi
+  chấp nhận được, ghi ở `docs/THREAT_MODEL.md`.
+- **D49. Kiểm tra hình dạng dữ liệu mã hóa chặt hơn.** `nonce` đúng 24 byte, `ciphertext` ít nhất một
+  tag (16 byte), có trần độ dài theo từng loại (tiêu đề 1 KB, nội dung 512 KB, khóa bọc 128 byte), gói
+  chia sẻ đúng độ dài từng thành phần (khóa 32, nonce 24, chữ ký 64 byte). Trước đây các trường này chỉ
+  cần là chuỗi base64url bất kỳ nên một client (hoặc kẻ có phiên) nhét được 900 KB vào `wrappedVaultKey`.
+  Tiêu đề trước đó không có giới hạn nào ở client; nay client cũng chặn (tính theo byte UTF-8).
+- **D50. Chốt hợp đồng `POST /api/notes/:id/rotate`.** Body gồm `version` (= hiện tại + 1), tiêu đề và nội
+  dung mã hóa lại, `wrappedNoteKey` mới, và `shares`: mảng `{ recipientEmail, sharePackage }` cho MỖI
+  người còn quyền. Tập người nhận sau khi xoay **đúng bằng** `shares`: ai vắng mặt bị thu hồi. Chọn "danh
+  sách đầy đủ" thay vì "danh sách người bị thu hồi" vì client buộc phải tạo gói chia sẻ mới cho người ở
+  lại (khóa đã đổi), nên danh sách đầy đủ là thông tin client đằng nào cũng có, và không thể xảy ra
+  chuyện quên thu hồi. Tối đa 50 người, không được lặp, không được có chính mình. Một transaction.
+- **D51. Ghi note bằng một câu `UPDATE` có điều kiện, không "kiểm tra rồi ghi".** `PUT` và `rotate` dùng
+  `update({ where: { id, ownerId, version } })`: chủ note và version được kiểm tra cùng lúc với việc ghi,
+  nên hai thiết bị cùng sửa từ một version thì đúng một bên thắng, không có khe hở giữa "đọc version" và
+  "ghi". Không ghi được (`P2025`) thì mới tra thêm để phân biệt `NOT_FOUND` với `VERSION_CONFLICT`.
+- **D52. Đổi mật khẩu: giữ phiên hiện tại, hủy phiên khác, trong một transaction.** Câu `UPDATE` mang
+  điều kiện `authKeyHash` khớp giá trị vừa kiểm tra, nên hai yêu cầu đổi đồng thời với cùng `oldAuthKey`
+  chỉ một cái thắng. Sai `oldAuthKey` trả `401 INVALID_CREDENTIALS` dù đang đăng nhập (giao diện phải xem
+  `code`, không coi mọi `401` là hết phiên). Rate limit 5 lần / 15 phút vì đây cũng là chỗ thử `oldAuthKey`.
+  **Giới hạn:** token của phiên hiện tại không được cấp lại (ASVS 7.2.4 chỉ bắt buộc khi đăng nhập).
+- **D53. Xóa gói chia sẻ không phải thu hồi mật mã.** `DELETE /api/shares/:id` chỉ chặn lần đọc sau qua
+  API; người nhận đã giải mã trước đó vẫn giữ được khóa. Thu hồi thật sự phải xoay khóa note (`rotate`,
+  D24). Ghi rõ trong API.md để giao diện không hứa quá mức với người dùng.
+- **D54. Test route chạy trên hai backend: DB giả và PostgreSQL thật.** Bộ test note, chia sẻ và đổi mật
+  khẩu chỉ gọi API và đọc response (không soi vào DB), nên chạy nguyên xi trên cả hai. DB giả luôn chạy
+  (CI, phát triển); PostgreSQL thật chạy khi đặt `TEST_DATABASE_URL`. Lý do: test với DB giả sơ sài chỉ
+  chứng minh route đúng với chính DB giả đó, không chứng minh câu truy vấn Prisma chạy đúng; và chỉ khi
+  cả hai cho kết quả giống nhau thì mới tin được DB giả. Từ D59, CI chạy cả hai backend.
+- **D55. Lỗi của Prisma chỉ được log tên lớp và mã lỗi, không log message hay stack.** Đã kiểm chứng trên
+  Prisma 6.19: `PrismaClientValidationError` in NGUYÊN đối tượng tham số của câu truy vấn vào message
+  (và cả stack), tức là ciphertext, khóa đã bọc, `authKeyHash`. Đặt `errorFormat: 'minimal'` KHÔNG che
+  được phần này. Vì vậy `server/src/plugins/errors.js` lọc lỗi Prisma trước khi ghi; lỗi thường của code
+  vẫn log đủ để gỡ lỗi. `meta` cũng bị bỏ vì với vài mã lỗi nó chứa giá trị cột.
+- **D56. Xác thực không được biến cuộc đua thành lỗi 500.** Cập nhật `lastSeenAt` dùng `updateMany`: nếu
+  phiên vừa bị xóa (đăng xuất ở tab khác) giữa lúc đọc và lúc ghi thì trả `401`, không phải `500`.
+  Phía client, `logout()` coi `UNAUTHENTICATED` từ server là thành công (phiên đã không còn), nhưng vẫn
+  báo lỗi mất mạng để giao diện cảnh báo phiên ở server có thể còn sống. Khóa cục bộ luôn bị xóa.
+
+## Test tích hợp
+
+- **D57. Package riêng `integration/` cho test client-sdk ↔ server.** Test đơn vị của mỗi bên đều dùng đồ
+  giả ở phía bên kia (`memoryTransport` ở SDK, body viết tay ở server), nên không bên nào phát hiện được
+  việc hai bên hiểu hợp đồng API khác nhau — chính là lỗi đã xảy ra với tên trường ở D34/D37. Ranh giới
+  kiến trúc cấm `client-sdk/` và `server/` import nhau, nên test này không đặt được ở package nào đang có.
+  `integration/` chỉ chứa test, là nơi DUY NHẤT được dùng cả hai, và có quy tắc depcruise cấm mọi package
+  khác import ngược vào nó. Chạy SDK thật (Argon2id và mã hóa thật) với server thật trên cổng thật, trên
+  cả DB giả lẫn PostgreSQL thật (dùng chung `TEST_DATABASE_URL` với server; `integration` khai báo phụ
+  thuộc vào `server` để `pnpm -r` chạy tuần tự, không tranh nhau database). Đã kiểm chứng giá trị: cố ý
+  phá 6 chỗ ở ranh giới, 4 chỗ chỉ bộ này bắt được.
+- **D58. `createFetchTransport(baseUrl, { fetch })` nhận hàm fetch từ ngoài.** Chỉ để test tích hợp chạy
+  được trên Node với cookie jar riêng cho từng "trình duyệt". Giao diện không cần truyền: mặc định là
+  fetch của trình duyệt. Gọi dạng hàm trần để tránh lỗi "Illegal invocation" trên trình duyệt.
+- **D59. CI chạy test trên PostgreSQL thật.** Workflow có service `postgres:17`, đặt `TEST_DATABASE_URL`,
+  sinh Prisma client rồi `prisma migrate deploy` trước `pnpm test`. Bước sinh client là bắt buộc: trong
+  monorepo, `pnpm install` không tự tìm thấy `server/prisma/schema.prisma` (đã kiểm chứng: thiếu bước này
+  thì test Postgres lỗi `Cannot find module '.prisma/client/default'`). Việc chạy `migrate deploy` trên
+  database trống ở mỗi lần CI cũng là phép thử miễn phí rằng migration áp được từ đầu. Workflow đã được
+  mô phỏng từng bước trên một bản sao sạch của repo trước khi đẩy lên.

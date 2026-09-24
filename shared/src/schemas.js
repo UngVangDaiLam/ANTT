@@ -8,7 +8,7 @@
  * Quy ước: mọi Object đều additionalProperties: false.
  */
 import { Type } from '@sinclair/typebox';
-import { CRYPTO_SIZES, LIMITS, NOTE_VERSION_START } from './config.js';
+import { CRYPTO_SIZES, KDF_MAXIMUMS, KDF_MINIMUMS, LIMITS, NOTE_VERSION_START } from './config.js';
 
 const strict = { additionalProperties: false };
 
@@ -55,17 +55,80 @@ export const IsoDateTime = Type.String({ pattern: '^\\d{4}-\\d{2}-\\d{2}T[0-9:.]
 /** Version của note: số nguyên, bắt đầu từ NOTE_VERSION_START (D18). */
 export const NoteVersion = Type.Integer({ minimum: NOTE_VERSION_START });
 
-/** Dữ liệu đã mã hóa/bọc bằng XChaCha20-Poly1305. */
-export const Sealed = Type.Object({ nonce: Base64Url, ciphertext: Base64Url }, strict);
+/** Số ký tự base64url (không padding) của `bytes` byte. */
+function base64UrlLength(bytes) {
+  return Math.ceil((bytes * 4) / 3);
+}
 
+/**
+ * Số ký tự tối đa của ciphertext khi bản rõ dài tối đa `maxPlaintextBytes` byte.
+ * Client dùng để tự kiểm tra giới hạn, server dùng để từ chối sớm.
+ * @param {number} maxPlaintextBytes
+ */
+export function sealedCiphertextMaxLength(maxPlaintextBytes) {
+  return base64UrlLength(maxPlaintextBytes + CRYPTO_SIZES.AEAD_TAG_BYTES);
+}
+
+/** Ciphertext ngắn nhất có thể: bản rõ rỗng, chỉ còn tag xác thực. */
+const CIPHERTEXT_MIN_LENGTH = base64UrlLength(CRYPTO_SIZES.AEAD_TAG_BYTES);
+
+/**
+ * Dữ liệu đã mã hóa/bọc bằng XChaCha20-Poly1305 với bản rõ dài tối đa `maxPlaintextBytes`.
+ * Nonce phải đúng 24 byte; ciphertext phải có ít nhất tag xác thực và không vượt trần.
+ * @param {number} maxPlaintextBytes
+ */
+export function SealedBounded(maxPlaintextBytes) {
+  return Type.Object(
+    {
+      nonce: Base64UrlBytes(CRYPTO_SIZES.NONCE_BYTES),
+      ciphertext: Type.String({
+        pattern: '^[A-Za-z0-9_-]+$',
+        minLength: CIPHERTEXT_MIN_LENGTH,
+        maxLength: sealedCiphertextMaxLength(maxPlaintextBytes),
+      }),
+    },
+    strict,
+  );
+}
+
+/** Dữ liệu đã mã hóa/bọc, không giới hạn độ dài riêng (chỉ bị chặn bởi bodyLimit của server). */
+export const Sealed = Type.Object(
+  {
+    nonce: Base64UrlBytes(CRYPTO_SIZES.NONCE_BYTES),
+    ciphertext: Type.String({ pattern: '^[A-Za-z0-9_-]+$', minLength: CIPHERTEXT_MIN_LENGTH }),
+  },
+  strict,
+);
+
+/** Khóa đã bọc: vaultKey, noteKey, private key. Nhỏ và có trần rõ ràng. */
+export const WrappedKey = SealedBounded(LIMITS.MAX_WRAPPED_KEY_BYTES);
+
+/** Tiêu đề note đã mã hóa. */
+export const EncryptedTitle = SealedBounded(LIMITS.MAX_NOTE_TITLE_BYTES);
+
+/** Nội dung note đã mã hóa. */
+export const EncryptedContent = SealedBounded(LIMITS.MAX_NOTE_PLAINTEXT_BYTES);
+
+/**
+ * Tham số Argon2id có sàn và trần (xem KDF_MINIMUMS). Được kiểm tra ở CẢ HAI phía: server không
+ * lưu tham số yếu, và client không chấp nhận tham số yếu mà server trả về.
+ */
 export const KdfParams = Type.Object(
-  { opslimit: Type.Integer({ minimum: 1 }), memlimit: Type.Integer({ minimum: 8192 }) },
+  {
+    opslimit: Type.Integer({ minimum: KDF_MINIMUMS.opslimit, maximum: KDF_MAXIMUMS.opslimit }),
+    memlimit: Type.Integer({ minimum: KDF_MINIMUMS.memlimit, maximum: KDF_MAXIMUMS.memlimit }),
+  },
   strict,
 );
 
 /** Gói chia sẻ (Lâm chốt chi tiết; chữ ký phải bao gồm noteId). */
 export const SharePackage = Type.Object(
-  { ephemeralPublicKey: Base64Url, nonce: Base64Url, ciphertext: Base64Url, signature: Base64Url },
+  {
+    ephemeralPublicKey: Base64UrlBytes(CRYPTO_SIZES.PUBLIC_KEY_BYTES),
+    nonce: Base64UrlBytes(CRYPTO_SIZES.NONCE_BYTES),
+    ciphertext: WrappedKey.properties.ciphertext,
+    signature: Base64UrlBytes(CRYPTO_SIZES.SIGNATURE_BYTES),
+  },
   strict,
 );
 
@@ -76,11 +139,11 @@ export const RegisterRequest = Type.Object(
     salt: Base64UrlBytes(CRYPTO_SIZES.SALT_BYTES),
     kdfParams: KdfParams,
     authKey: Base64UrlBytes(CRYPTO_SIZES.AUTH_KEY_BYTES),
-    wrappedVaultKey: Sealed,
+    wrappedVaultKey: WrappedKey,
     x25519PublicKey: Base64UrlBytes(CRYPTO_SIZES.PUBLIC_KEY_BYTES),
     ed25519PublicKey: Base64UrlBytes(CRYPTO_SIZES.PUBLIC_KEY_BYTES),
-    wrappedX25519PrivateKey: Sealed,
-    wrappedEd25519PrivateKey: Sealed,
+    wrappedX25519PrivateKey: WrappedKey,
+    wrappedEd25519PrivateKey: WrappedKey,
   },
   strict,
 );
@@ -90,6 +153,9 @@ export const ErrorBody = Type.Object({ code: Type.String(), message: Type.String
 // ---------------------------------------------------------------------------
 // Tài khoản
 // ---------------------------------------------------------------------------
+
+/** Tham số đường dẫn của GET /api/users/:email/salt và /keys. */
+export const EmailParams = Type.Object({ email: Email }, strict);
 
 /** GET /api/users/:email/salt. Email chưa đăng ký vẫn trả salt giả (D15). */
 export const SaltResponse = Type.Object(
@@ -110,11 +176,11 @@ export const LoginRequest = Type.Object(
 export const SelfAccountResponse = Type.Object(
   {
     email: NormalizedEmail,
-    wrappedVaultKey: Sealed,
+    wrappedVaultKey: WrappedKey,
     x25519PublicKey: Base64UrlBytes(CRYPTO_SIZES.PUBLIC_KEY_BYTES),
     ed25519PublicKey: Base64UrlBytes(CRYPTO_SIZES.PUBLIC_KEY_BYTES),
-    wrappedX25519PrivateKey: Sealed,
-    wrappedEd25519PrivateKey: Sealed,
+    wrappedX25519PrivateKey: WrappedKey,
+    wrappedEd25519PrivateKey: WrappedKey,
   },
   strict,
 );
@@ -138,9 +204,9 @@ export const ChangePasswordRequest = Type.Object(
     salt: Base64UrlBytes(CRYPTO_SIZES.SALT_BYTES),
     kdfParams: KdfParams,
     authKey: Base64UrlBytes(CRYPTO_SIZES.AUTH_KEY_BYTES),
-    wrappedVaultKey: Sealed,
-    wrappedX25519PrivateKey: Sealed,
-    wrappedEd25519PrivateKey: Sealed,
+    wrappedVaultKey: WrappedKey,
+    wrappedX25519PrivateKey: WrappedKey,
+    wrappedEd25519PrivateKey: WrappedKey,
   },
   strict,
 );
@@ -154,9 +220,9 @@ export const NoteCreateRequest = Type.Object(
   {
     id: Uuid,
     version: Type.Literal(NOTE_VERSION_START),
-    encryptedTitle: Sealed,
-    encryptedContent: Sealed,
-    wrappedNoteKey: Sealed,
+    encryptedTitle: EncryptedTitle,
+    encryptedContent: EncryptedContent,
+    wrappedNoteKey: WrappedKey,
   },
   strict,
 );
@@ -165,8 +231,8 @@ export const NoteCreateRequest = Type.Object(
 export const NoteUpdateRequest = Type.Object(
   {
     version: Type.Integer({ minimum: NOTE_VERSION_START + 1 }),
-    encryptedTitle: Sealed,
-    encryptedContent: Sealed,
+    encryptedTitle: EncryptedTitle,
+    encryptedContent: EncryptedContent,
   },
   strict,
 );
@@ -187,14 +253,39 @@ export const NoteListItem = Type.Object(
   {
     id: Uuid,
     version: NoteVersion,
-    encryptedTitle: Sealed,
-    wrappedNoteKey: Sealed,
+    encryptedTitle: EncryptedTitle,
+    wrappedNoteKey: WrappedKey,
     updatedAt: IsoDateTime,
   },
   strict,
 );
 
 export const NoteListResponse = Type.Array(NoteListItem);
+
+/** Tham số đường dẫn `:id` của các route note và share. */
+export const IdParams = Type.Object({ id: Uuid }, strict);
+
+/** Một người nhận còn quyền sau khi xoay khóa note, kèm gói chia sẻ chứa khóa note MỚI. */
+export const RotateShareEntry = Type.Object(
+  { recipientEmail: Email, sharePackage: SharePackage },
+  strict,
+);
+
+/**
+ * POST /api/notes/:id/rotate: thu hồi quyền truy cập (D24). Client sinh noteKey mới, mã hóa lại
+ * tiêu đề và nội dung, bọc noteKey mới, rồi gửi kèm gói chia sẻ mới cho MỖI người còn quyền.
+ * Người nhận không có trong `shares` bị xóa quyền. Cả thao tác là một transaction.
+ */
+export const RotateRequest = Type.Object(
+  {
+    version: Type.Integer({ minimum: NOTE_VERSION_START + 1 }),
+    encryptedTitle: EncryptedTitle,
+    encryptedContent: EncryptedContent,
+    wrappedNoteKey: WrappedKey,
+    shares: Type.Array(RotateShareEntry, { maxItems: LIMITS.MAX_ROTATE_SHARES }),
+  },
+  strict,
+);
 
 /**
  * GET /api/notes/:id. Chủ note nhận `wrappedNoteKey`; người được chia sẻ nhận
@@ -206,10 +297,10 @@ export const NoteResponse = Type.Object(
   {
     id: Uuid,
     version: NoteVersion,
-    encryptedTitle: Sealed,
-    encryptedContent: Sealed,
+    encryptedTitle: EncryptedTitle,
+    encryptedContent: EncryptedContent,
     updatedAt: IsoDateTime,
-    wrappedNoteKey: Type.Optional(Sealed),
+    wrappedNoteKey: Type.Optional(WrappedKey),
     share: Type.Optional(
       Type.Object({ senderEmail: NormalizedEmail, sharePackage: SharePackage }, strict),
     ),

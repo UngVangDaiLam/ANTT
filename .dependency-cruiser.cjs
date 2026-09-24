@@ -51,6 +51,15 @@ module.exports = {
       to: { path: ['^server/', '^web/', '@secure-notes/(server|web)'] },
     },
     {
+      name: 'khong-ai-dung-integration',
+      severity: 'error',
+      comment:
+        'integration/ chỉ chứa test tích hợp, là nơi DUY NHẤT được dùng cả client-sdk lẫn server. ' +
+        'Không package nào được import ngược vào nó.',
+      from: { pathNot: '^integration/' },
+      to: { path: ['^integration/', '@secure-notes/integration'] },
+    },
+    {
       name: 'goi-phai-khai-bao',
       severity: 'error',
       comment:

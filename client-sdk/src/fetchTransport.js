@@ -35,11 +35,17 @@ import { ApiError } from './apiError.js';
 /**
  * @param {string} [baseUrl] Mặc định rỗng: giao diện và API cùng origin
  *   (Vite proxy khi dev, Caddy khi deploy — D07), nên đường dẫn tương đối là đủ.
+ * @param {object} [options]
+ * @param {typeof fetch} [options.fetch] Hàm fetch dùng để gọi API. Giao diện KHÔNG cần truyền: mặc
+ *   định là fetch của trình duyệt. Chỉ test tích hợp dùng, để chạy trên Node với cookie jar riêng
+ *   cho từng "trình duyệt" giả lập.
  * @returns {import('./transportType.js').Transport}
  */
-export function createFetchTransport(baseUrl = '') {
+export function createFetchTransport(baseUrl = '', { fetch: fetchImpl = globalThis.fetch } = {}) {
   async function callApi(method, path, body) {
-    const response = await fetch(`${baseUrl}/api${path}`, {
+    // Gọi dạng hàm trần `fetchImpl(...)`, KHÔNG phải `options.fetch(...)`: trình duyệt ném
+    // "Illegal invocation" nếu fetch bị gọi với `this` khác window.
+    const response = await fetchImpl(`${baseUrl}/api${path}`, {
       method,
       headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
       credentials: 'include', // gửi kèm cookie phiên httpOnly

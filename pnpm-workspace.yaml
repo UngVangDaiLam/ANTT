@@ -4,6 +4,7 @@ packages:
   - client-sdk
   - server
   - web
+  - integration
 
 # pnpm 10 chặn script cài đặt theo mặc định; Prisma cần chạy script để tải engine.
 onlyBuiltDependencies:

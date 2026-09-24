@@ -2,6 +2,7 @@ import { describe, test, expect } from 'vitest';
 import { KDF_DEFAULTS, LIMITS } from '@secure-notes/shared';
 import { SecureNoteClient } from '../src/client.js';
 import { createMemoryServer, createMemoryTransport } from '../src/memoryTransport.js';
+import { ApiError } from '../src/apiError.js';
 
 /** Một người dùng = một trình duyệt = một kết nối riêng tới server giả. */
 function newClient(server) {
@@ -220,6 +221,35 @@ describe('SecureNoteClient (giống hệt cách giao diện web sẽ dùng)', ()
     expect(alice2.isLoggedIn()).toBe(true);
   });
 
+  test('logout() khi server báo phiên đã mất vẫn thành công và vẫn xóa khóa', async () => {
+    const transport = createMemoryTransport();
+    const alice = new SecureNoteClient(transport);
+    await alice.register('alice18@example.com', 'mk');
+    const masterKeyRef = alice._session.masterKey;
+    // Phiên ở server đã bị hủy từ trước (hết hạn, hoặc đổi mật khẩu ở thiết bị khác).
+    transport.logout = async () => {
+      throw new ApiError('UNAUTHENTICATED', 'Bạn chưa đăng nhập hoặc phiên đã hết hạn.');
+    };
+
+    await expect(alice.logout()).resolves.toBeUndefined();
+    expect(alice.isLoggedIn()).toBe(false);
+    expect(masterKeyRef.every((byte) => byte === 0)).toBe(true);
+  });
+
+  test('logout() khi mất mạng: vẫn xóa khóa cục bộ nhưng báo lỗi để giao diện cảnh báo', async () => {
+    const transport = createMemoryTransport();
+    const alice = new SecureNoteClient(transport);
+    await alice.register('alice19@example.com', 'mk');
+    const masterKeyRef = alice._session.masterKey;
+    transport.logout = async () => {
+      throw new TypeError('Failed to fetch');
+    };
+
+    await expect(alice.logout()).rejects.toThrow('Failed to fetch');
+    expect(alice.isLoggedIn()).toBe(false);
+    expect(masterKeyRef.every((byte) => byte === 0)).toBe(true);
+  });
+
   test('logout() xóa khóa khỏi bộ nhớ (memzero) - khóa cũ thành toàn số 0', async () => {
     const alice = newClient(createMemoryServer());
     await alice.register('alice13@example.com', 'mat-khau-cua-alice');
@@ -239,6 +269,27 @@ describe('SecureNoteClient (giống hệt cách giao diện web sẽ dùng)', ()
       'vượt giới hạn',
     );
     expect(await alice.listNotes()).toHaveLength(0);
+  });
+
+  test('tiêu đề vượt giới hạn cũng bị chặn ngay ở client', async () => {
+    const alice = newClient(createMemoryServer());
+    await alice.register('alice16@example.com', 'mk');
+
+    const quaDai = 'a'.repeat(LIMITS.MAX_NOTE_TITLE_BYTES + 1);
+    await expect(alice.createNote({ title: quaDai, content: 'ok' })).rejects.toThrow(
+      'Tiêu đề note',
+    );
+    expect(await alice.listNotes()).toHaveLength(0);
+  });
+
+  test('tiêu đề tính theo byte UTF-8, không theo số ký tự', async () => {
+    const alice = newClient(createMemoryServer());
+    await alice.register('alice17@example.com', 'mk');
+
+    // Mỗi chữ "ế" chiếm 3 byte: 342 chữ = 1026 byte > 1024 dù chỉ có 342 ký tự.
+    const title = 'ế'.repeat(Math.floor(LIMITS.MAX_NOTE_TITLE_BYTES / 3) + 1);
+    expect(title.length).toBeLessThan(LIMITS.MAX_NOTE_TITLE_BYTES);
+    await expect(alice.createNote({ title, content: 'ok' })).rejects.toThrow('Tiêu đề note');
   });
 });
 

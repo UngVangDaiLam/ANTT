@@ -180,11 +180,16 @@ export class SecureNoteClient {
    * gian khóa nhạy cảm còn nằm trong RAM.
    *
    * Khóa được xóa kể cả khi gọi server thất bại (mất mạng), vì xóa khóa cục bộ
-   * là việc quan trọng hơn.
+   * là việc quan trọng hơn. Server trả UNAUTHENTICATED (phiên đã hết hạn, hoặc đã
+   * bị hủy vì đổi mật khẩu ở thiết bị khác) thì mục tiêu đã đạt: không báo lỗi.
+   * Lỗi khác (mất mạng...) vẫn được ném ra sau khi đã xóa khóa, để giao diện cảnh
+   * báo rằng phiên ở server có thể vẫn còn sống.
    */
   async logout() {
     try {
       await this.transport.logout();
+    } catch (err) {
+      if (err?.code !== 'UNAUTHENTICATED') throw err;
     } finally {
       if (this._session) {
         sodium.memzero(this._session.masterKey);
@@ -256,7 +261,8 @@ export class SecureNoteClient {
   async createNote({ title, content }) {
     await ready();
     const session = this._requireSession();
-    assertPlaintextSize(content);
+    assertPlaintextSize('Nội dung note', content, LIMITS.MAX_NOTE_PLAINTEXT_BYTES);
+    assertPlaintextSize('Tiêu đề note', title, LIMITS.MAX_NOTE_TITLE_BYTES);
 
     // D17: id do client sinh vì nó sẽ nằm trong Associated Data của ciphertext.
     const id = globalThis.crypto.randomUUID();
@@ -411,12 +417,14 @@ export class SecureNoteClient {
 /**
  * D28: chặn nội dung quá lớn NGAY Ở CLIENT, trước khi mã hóa — vừa báo lỗi rõ
  * ràng cho người dùng, vừa không tốn công mã hóa thứ server sẽ từ chối.
+ * Server cũng chặn ciphertext vượt trần tương ứng (SealedBounded trong shared/).
+ * @param {string} label tên trường, dùng trong thông báo lỗi
+ * @param {string} text
+ * @param {number} maxBytes
  */
-function assertPlaintextSize(content) {
-  const bytes = sodium.from_string(content).length;
-  if (bytes > LIMITS.MAX_NOTE_PLAINTEXT_BYTES) {
-    throw new Error(
-      `Nội dung note ${bytes} byte, vượt giới hạn ${LIMITS.MAX_NOTE_PLAINTEXT_BYTES} byte.`,
-    );
+function assertPlaintextSize(label, text, maxBytes) {
+  const bytes = sodium.from_string(text).length;
+  if (bytes > maxBytes) {
+    throw new Error(`${label} ${bytes} byte, vượt giới hạn ${maxBytes} byte.`);
   }
 }

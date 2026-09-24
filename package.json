@@ -12,7 +12,7 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "depcheck": "depcruise shared crypto client-sdk server web --config .dependency-cruiser.cjs",
+    "depcheck": "depcruise shared crypto client-sdk server web integration --config .dependency-cruiser.cjs",
     "check": "pnpm lint && pnpm format:check && pnpm depcheck && pnpm test",
     "dev:server": "pnpm --filter @secure-notes/server dev",
     "dev:web": "pnpm --filter @secure-notes/web dev"

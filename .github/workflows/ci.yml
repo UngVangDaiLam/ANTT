@@ -8,6 +8,27 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
+
+    # PostgreSQL thật cho test (D54, D57). Có biến TEST_DATABASE_URL thì bộ test route của server và bộ
+    # test tích hợp chạy trên CẢ DB giả lẫn Postgres thật; không có thì chỉ chạy DB giả.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: securenotes
+          POSTGRES_PASSWORD: securenotes
+          POSTGRES_DB: securenotes_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U securenotes"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      TEST_DATABASE_URL: postgresql://securenotes:securenotes@localhost:5432/securenotes_test
+
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -20,6 +41,16 @@ jobs:
       - run: pnpm format:check
       - name: Kiểm tra ranh giới kiến trúc (server không dùng crypto)
         run: pnpm depcheck
-      - run: pnpm test
+
+      # Trong monorepo, `pnpm install` không tự tìm thấy server/prisma/schema.prisma để sinh client.
+      - name: Sinh Prisma client
+        run: pnpm --filter @secure-notes/server db:generate
+      - name: Tạo bảng trong database test
+        run: pnpm --filter @secure-notes/server exec prisma migrate deploy
+        env:
+          DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
+
+      - name: Chạy test (DB giả và PostgreSQL thật)
+        run: pnpm test
       - name: Kiểm tra lỗ hổng thư viện
         run: pnpm audit --audit-level high

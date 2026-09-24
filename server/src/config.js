@@ -15,5 +15,8 @@ export function loadConfig(env = process.env) {
       .map((s) => s.trim())
       .filter(Boolean),
     serverSecret,
+    // Chỉ bật khi server nằm sau Caddy/reverse proxy: lúc đó `request.ip` mới lấy từ
+    // X-Forwarded-For. Bật nhầm khi KHÔNG có proxy thì client tự khai IP giả được, phá rate limit.
+    trustProxy: env.TRUST_PROXY === 'true',
   });
 }

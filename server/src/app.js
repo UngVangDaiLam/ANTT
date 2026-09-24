@@ -6,8 +6,11 @@ import { AppError, LIMITS } from '@secure-notes/shared';
 import { loadConfig } from './config.js';
 import securityPlugin from './plugins/security.js';
 import errorsPlugin from './plugins/errors.js';
+import authPlugin from './plugins/auth.js';
 import healthRoutes from './routes/health.js';
 import authRoutes from './routes/auth.js';
+import noteRoutes from './routes/notes.js';
+import shareRoutes from './routes/shares.js';
 
 /**
  * Tạo ứng dụng Fastify. Tách khỏi server.js để test bằng app.inject()
@@ -20,6 +23,7 @@ import authRoutes from './routes/auth.js';
 export async function buildApp({ config = loadConfig(), logger = false, db } = {}) {
   const app = Fastify({
     logger,
+    trustProxy: config.trustProxy,
     bodyLimit: LIMITS.MAX_REQUEST_BYTES,
     // Mặc định của Fastify là 'error', ghi rõ ra để thể hiện chủ đích:
     // request JSON chứa __proto__ hoặc constructor.prototype bị từ chối ngay.
@@ -44,6 +48,7 @@ export async function buildApp({ config = loadConfig(), logger = false, db } = {
     global: false, // bật riêng cho từng route nhạy cảm (login, salt...)
     errorResponseBuilder: () => new AppError('RATE_LIMITED'),
   });
+  await app.register(authPlugin);
   await app.register(swagger, {
     openapi: { info: { title: 'Secure Notes API', version: '0.1.0' } },
   });
@@ -53,9 +58,9 @@ export async function buildApp({ config = loadConfig(), logger = false, db } = {
       await api.register(healthRoutes);
       api.get('/openapi.json', { schema: { hide: true } }, () => app.swagger());
       await api.register(authRoutes);
-      // TODO [Trần Bảo]: đăng ký các route còn lại theo docs/API.md
-      // await api.register(noteRoutes);
-      // await api.register(shareRoutes);
+      await api.register(noteRoutes);
+      await api.register(shareRoutes);
+      // Còn thiếu theo docs/API.md: GET /sessions, DELETE /sessions/:id, GET /login-history.
       // await api.register(sessionRoutes);
     },
     { prefix: '/api' },

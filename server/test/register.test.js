@@ -1,46 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
-import { randomBytes } from 'node:crypto';
 import { KDF_DEFAULTS, RATE_LIMITS } from '@secure-notes/shared';
 import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 import { hashAuthKey } from '../src/lib/auth-key.js';
-
-const b64 = (bytes) => randomBytes(bytes).toString('base64url');
-const sealed = () => ({ nonce: b64(24), ciphertext: b64(48) });
-
-/** Body hợp lệ theo RegisterRequest; ghi đè từng trường qua `overrides`. */
-function registerBody(overrides = {}) {
-  return {
-    email: 'lam@example.com',
-    salt: b64(16),
-    kdfParams: { ...KDF_DEFAULTS },
-    authKey: b64(32),
-    wrappedVaultKey: sealed(),
-    x25519PublicKey: b64(32),
-    ed25519PublicKey: b64(32),
-    wrappedX25519PrivateKey: sealed(),
-    wrappedEd25519PrivateKey: sealed(),
-    ...overrides,
-  };
-}
-
-/** DB giả trong bộ nhớ, mô phỏng ràng buộc unique của Prisma trên email. */
-function createFakeDb() {
-  const users = new Map();
-  return {
-    users,
-    user: {
-      async create({ data }) {
-        if (users.has(data.email)) {
-          throw Object.assign(new Error('Unique constraint failed'), { code: 'P2002' });
-        }
-        const id = crypto.randomUUID();
-        users.set(data.email, { id, ...data });
-        return { id };
-      },
-    },
-  };
-}
+import { createFakeDb } from './helpers/fake-db.js';
+import { b64, registerBody, sealed } from './helpers/fixtures.js';
 
 let app;
 let db;

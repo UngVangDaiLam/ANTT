@@ -5,14 +5,24 @@ import {
   Base64UrlBytes,
   Email,
   IsoDateTime,
+  KDF_DEFAULTS,
+  KDF_MAXIMUMS,
+  KDF_MINIMUMS,
+  KdfParams,
+  LIMITS,
+  NoteCreateRequest,
   NoteListItem,
   NoteResponse,
   NormalizedEmail,
   RegisterRequest,
+  RotateRequest,
   SaltResponse,
   Sealed,
+  SealedBounded,
+  SharePackage,
   Uuid,
   normalizeEmail,
+  sealedCiphertextMaxLength,
 } from '../src/index.js';
 
 describe('shared', () => {
@@ -27,9 +37,12 @@ describe('shared', () => {
   });
 
   test('Sealed từ chối trường lạ và __proto__', () => {
-    expect(Value.Check(Sealed, { nonce: 'abc', ciphertext: 'def' })).toBe(true);
-    expect(Value.Check(Sealed, { nonce: 'abc', ciphertext: 'def', extra: 1 })).toBe(false);
-    const polluted = JSON.parse('{"nonce":"a","ciphertext":"b","__proto__":{"x":1}}');
+    const ok = { nonce: Buffer.alloc(24, 1).toString('base64url'), ciphertext: 'A'.repeat(64) };
+    expect(Value.Check(Sealed, ok)).toBe(true);
+    expect(Value.Check(Sealed, { ...ok, extra: 1 })).toBe(false);
+    const polluted = JSON.parse(
+      `{"nonce":"${ok.nonce}","ciphertext":"${ok.ciphertext}","__proto__":{"x":1}}`,
+    );
     expect(Value.Check(Sealed, polluted)).toBe(false);
   });
 
@@ -132,5 +145,115 @@ describe('shared', () => {
     };
     expect(Value.Check(NoteListItem, item)).toBe(true);
     expect(Value.Check(NoteListItem, { ...item, encryptedContent: sealed })).toBe(false);
+  });
+
+  test('sealedCiphertextMaxLength khớp độ dài base64url thực của libsodium', () => {
+    // ciphertext = bản rõ + 16 byte tag; base64url không padding dài ceil(n * 4 / 3) ký tự.
+    for (const plaintextBytes of [0, 1, 2, 3, 32, 1024]) {
+      const real = Buffer.alloc(plaintextBytes + 16, 7).toString('base64url');
+      expect(sealedCiphertextMaxLength(plaintextBytes)).toBe(real.length);
+    }
+  });
+
+  test('SealedBounded: nonce đúng 24 byte, ciphertext có tag và không vượt trần', () => {
+    const schema = SealedBounded(32);
+    const nonce = Buffer.alloc(24, 1).toString('base64url');
+    const at = (n) => ({ nonce, ciphertext: 'A'.repeat(n) });
+    const max = sealedCiphertextMaxLength(32);
+
+    expect(Value.Check(schema, at(max))).toBe(true);
+    expect(Value.Check(schema, at(max + 1))).toBe(false); // vượt trần
+    expect(Value.Check(schema, at(21))).toBe(false); // ngắn hơn một tag 16 byte
+    expect(Value.Check(schema, { ...at(max), nonce: Buffer.alloc(12).toString('base64url') })).toBe(
+      false,
+    );
+    expect(Value.Check(schema, { ...at(max), nonce: `${nonce}=` })).toBe(false); // có padding
+  });
+
+  test('KdfParams có sàn và trần: chặn tham số yếu lẫn tham số khổng lồ', () => {
+    const ok = { ...KDF_DEFAULTS };
+    expect(Value.Check(KdfParams, ok)).toBe(true);
+    expect(Value.Check(KdfParams, KDF_MINIMUMS)).toBe(true);
+    expect(Value.Check(KdfParams, KDF_MAXIMUMS)).toBe(true);
+    expect(Value.Check(KdfParams, { ...ok, opslimit: KDF_MINIMUMS.opslimit - 1 })).toBe(false);
+    expect(Value.Check(KdfParams, { ...ok, memlimit: KDF_MINIMUMS.memlimit - 1 })).toBe(false);
+    expect(Value.Check(KdfParams, { ...ok, opslimit: KDF_MAXIMUMS.opslimit + 1 })).toBe(false);
+    expect(Value.Check(KdfParams, { ...ok, memlimit: KDF_MAXIMUMS.memlimit + 1 })).toBe(false);
+    expect(Value.Check(KdfParams, { ...ok, opslimit: 2.5 })).toBe(false);
+  });
+
+  test('SaltResponse từ chối tham số Argon2id yếu: server độc hại không hạ cấp được client', () => {
+    const salt = Buffer.alloc(16, 3).toString('base64url');
+    const weak = { opslimit: 1, memlimit: 8192 };
+    expect(Value.Check(SaltResponse, { salt, kdfParams: weak })).toBe(false);
+    expect(Value.Check(SaltResponse, { salt, kdfParams: KDF_DEFAULTS })).toBe(true);
+  });
+
+  test('mặc định KDF_DEFAULTS luôn nằm trong [sàn, trần]', () => {
+    expect(KDF_DEFAULTS.opslimit).toBeGreaterThanOrEqual(KDF_MINIMUMS.opslimit);
+    expect(KDF_DEFAULTS.memlimit).toBeGreaterThanOrEqual(KDF_MINIMUMS.memlimit);
+    expect(KDF_DEFAULTS.opslimit).toBeLessThanOrEqual(KDF_MAXIMUMS.opslimit);
+    expect(KDF_DEFAULTS.memlimit).toBeLessThanOrEqual(KDF_MAXIMUMS.memlimit);
+  });
+
+  test('SharePackage kiểm tra độ dài chính xác của từng thành phần', () => {
+    const b = (n) => Buffer.alloc(n, 1).toString('base64url');
+    const pkg = {
+      ephemeralPublicKey: b(32),
+      nonce: b(24),
+      ciphertext: b(48),
+      signature: b(64),
+    };
+    expect(Value.Check(SharePackage, pkg)).toBe(true);
+    expect(Value.Check(SharePackage, { ...pkg, signature: b(32) })).toBe(false);
+    expect(Value.Check(SharePackage, { ...pkg, ephemeralPublicKey: b(16) })).toBe(false);
+    expect(Value.Check(SharePackage, { ...pkg, nonce: b(12) })).toBe(false);
+  });
+
+  test('NoteCreateRequest: version phải là 1, tiêu đề bị chặn trần riêng', () => {
+    const b = (n) => Buffer.alloc(n, 1).toString('base64url');
+    const sealed = { nonce: b(24), ciphertext: b(48) };
+    const body = {
+      id: crypto.randomUUID(),
+      version: 1,
+      encryptedTitle: sealed,
+      encryptedContent: sealed,
+      wrappedNoteKey: sealed,
+    };
+    const longTitle = {
+      nonce: b(24),
+      ciphertext: 'A'.repeat(sealedCiphertextMaxLength(LIMITS.MAX_NOTE_TITLE_BYTES) + 1),
+    };
+    expect(Value.Check(NoteCreateRequest, body)).toBe(true);
+    expect(Value.Check(NoteCreateRequest, { ...body, version: 2 })).toBe(false);
+    expect(Value.Check(NoteCreateRequest, { ...body, encryptedTitle: longTitle })).toBe(false);
+    expect(Value.Check(NoteCreateRequest, { ...body, ownerId: 'x' })).toBe(false);
+  });
+
+  test('RotateRequest: giới hạn số người nhận và từ chối trường lạ', () => {
+    const b = (n) => Buffer.alloc(n, 1).toString('base64url');
+    const sealed = { nonce: b(24), ciphertext: b(48) };
+    const entry = (i) => ({
+      recipientEmail: `u${i}@example.com`,
+      sharePackage: {
+        ephemeralPublicKey: b(32),
+        nonce: b(24),
+        ciphertext: b(48),
+        signature: b(64),
+      },
+    });
+    const body = (n) => ({
+      version: 2,
+      encryptedTitle: sealed,
+      encryptedContent: sealed,
+      wrappedNoteKey: sealed,
+      shares: Array.from({ length: n }, (_, i) => entry(i)),
+    });
+
+    expect(Value.Check(RotateRequest, body(0))).toBe(true);
+    expect(Value.Check(RotateRequest, body(LIMITS.MAX_ROTATE_SHARES))).toBe(true);
+    expect(Value.Check(RotateRequest, body(LIMITS.MAX_ROTATE_SHARES + 1))).toBe(false);
+    expect(Value.Check(RotateRequest, { ...body(1), version: 1 })).toBe(false);
+    expect(Value.Check(RotateRequest, { ...body(1), extra: true })).toBe(false);
   });
 });
