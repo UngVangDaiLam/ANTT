@@ -18,6 +18,7 @@
 import { getSodium, kdf, vault, note, sharing, toBase64, fromBase64 } from '@secure-notes/crypto';
 import { KDF_DEFAULTS, LIMITS, NOTE_VERSION_START, normalizeEmail } from '@secure-notes/shared';
 import { ApiError } from './apiError.js';
+import { assertAcceptablePassword } from './passwordPolicy.js';
 
 // client-sdk KHÔNG tự import libsodium-wrappers-sumo: mọi thao tác mật mã đi
 // qua @secure-notes/crypto để chỉ một chỗ duy nhất trong repo chạm vào thư viện.
@@ -81,6 +82,8 @@ export class SecureNoteClient {
    * @returns {Promise<{email: string}>}
    */
   async register(email, password) {
+    // Trước mọi thứ khác: mật khẩu yếu thì không chạy Argon2id, không gửi gì lên server.
+    assertAcceptablePassword(password);
     await ready();
     const normalizedEmail = normalizeEmail(email);
 
@@ -215,8 +218,11 @@ export class SecureNoteClient {
    * @returns {Promise<{email: string}>}
    */
   async changePassword(oldPassword, newPassword) {
-    await ready();
     const session = this._requireSession();
+    // Chỉ kiểm tra mật khẩu MỚI. Mật khẩu cũ có thể yếu (đặt trước khi có chính sách này); chặn nó thì
+    // người dùng bị kẹt, không đổi được sang mật khẩu mạnh hơn.
+    assertAcceptablePassword(newPassword);
+    await ready();
 
     const { salt: oldSalt, kdfParams: oldKdfParams } = await this.transport.getSalt(session.email);
     const { authKey: oldAuthKey } = await kdf.deriveKeysFromPassword(

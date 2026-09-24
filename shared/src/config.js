@@ -58,6 +58,22 @@ export const RATE_LIMITS = Object.freeze({
   USER_KEYS: { max: 60, timeWindowMs: 15 * 60 * 1000 },
 });
 
+/**
+ * Chính sách mật khẩu (ASVS 6.2.1, 6.2.4, 6.2.5). Chỉ kiểm tra được ở CLIENT: server không bao giờ
+ * thấy mật khẩu, chỉ nhận authKey đã dẫn xuất qua Argon2id.
+ * - Độ dài tính theo ký tự Unicode (code point), không theo byte hay đơn vị UTF-16: "mật" là 3 ký tự.
+ * - Không có luật bắt buộc chữ hoa, số, ký tự đặc biệt (6.2.5): các luật đó đẩy người dùng tới những
+ *   mật khẩu dễ đoán như "Password1!", trong khi độ dài mới là thứ thật sự làm khó kẻ tấn công.
+ * - Mật khẩu được giữ NGUYÊN như người dùng gõ (6.2.8): không trim, không đổi hoa thường.
+ */
+export const PASSWORD_POLICY = Object.freeze({
+  MIN_LENGTH: 8,
+  /** ASVS "strongly recommended": giao diện nên khuyến khích, nhưng không bắt buộc. */
+  RECOMMENDED_LENGTH: 15,
+  /** Số mật khẩu phổ biến (đã lọc theo MIN_LENGTH) bị từ chối, theo ASVS 6.2.4. */
+  COMMON_LIST_SIZE: 3000,
+});
+
 /** Version của note bắt đầu từ 1; mỗi lần sửa phải đúng bằng version hiện tại + 1. */
 export const NOTE_VERSION_START = 1;
 

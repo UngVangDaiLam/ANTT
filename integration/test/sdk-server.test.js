@@ -154,6 +154,18 @@ describe.each(backends)('client-sdk ↔ server [$name]', (backend) => {
       expect(replay.status).toBe(401);
     });
 
+    test('mật khẩu yếu bị chặn ngay ở client: không một byte nào được gửi lên server', async () => {
+      const weak = user();
+      await expect(weak.client.register('alice@example.com', 'password1')).rejects.toMatchObject({
+        code: 'WEAK_PASSWORD',
+      });
+      expect(weak.browser.sent).toEqual([]);
+      // Và tài khoản đó thật sự không tồn tại trên server.
+      await expect(user().client.login('alice@example.com', 'password1')).rejects.toMatchObject({
+        code: 'INVALID_CREDENTIALS',
+      });
+    });
+
     test('nội dung quá lớn bị chặn ngay ở client, không có request nào được gửi', async () => {
       const alice = user();
       await alice.client.register('alice@example.com', 'mk-alice-dai');

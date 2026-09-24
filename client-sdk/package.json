@@ -8,7 +8,8 @@
     ".": "./src/index.js"
   },
   "scripts": {
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "build:common-passwords": "node scripts/build-common-passwords.js"
   },
   "dependencies": {
     "@secure-notes/crypto": "workspace:*",

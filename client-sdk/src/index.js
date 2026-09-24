@@ -10,3 +10,4 @@ export { SecureNoteClient } from './client.js';
 export { createFetchTransport } from './fetchTransport.js';
 export { createMemoryTransport, createMemoryServer } from './memoryTransport.js';
 export { ApiError } from './apiError.js';
+export { checkPassword } from './passwordPolicy.js';

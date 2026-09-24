@@ -219,3 +219,22 @@ nếu đổi ý thì ghi quyết định mới thay thế.
   người dùng sẽ tưởng đã thu hồi được quyền của ai đó. Danh sách rỗng nghĩa là chỉ xoay khóa, giữ nguyên
   mọi người. **Giới hạn:** danh sách người nhận được đọc ngay trước khi xoay; nếu đúng lúc đó một thiết
   bị khác của chính chủ note vừa chia sẻ cho người mới, người đó cũng bị gỡ.
+
+## Chính sách mật khẩu
+
+- **D63. Chính sách mật khẩu kiểm tra ở client, trước Argon2id (ASVS 6.2.1, 6.2.4, 6.2.5, 6.2.8).** Server
+  không bao giờ thấy mật khẩu nên không có cách nào khác. Tối thiểu 8 ký tự Unicode (không phải byte),
+  từ chối 3000 mật khẩu phổ biến (so không phân biệt hoa thường), không có luật bắt buộc chữ hoa/số/ký tự
+  đặc biệt, không trim. Áp cho `register` và mật khẩu MỚI của `changePassword`; KHÔNG áp cho `login` và
+  mật khẩu cũ, nếu không tài khoản đặt trước khi có chính sách sẽ bị khóa ngoài và không đổi được sang
+  mật khẩu mạnh hơn. `checkPassword()` được export để giao diện phản hồi ngay khi người dùng đang gõ;
+  lỗi dùng mã `WEAK_PASSWORD` trong `shared/src/errors.js` để giao diện xử lý như mọi lỗi khác.
+  **Giới hạn:** gọi thẳng API (không qua SDK) thì vẫn đăng ký được với mật khẩu yếu. Người đó chỉ tự làm
+  hại tài khoản của chính mình, và server không thể phát hiện vì chỉ thấy authKey.
+- **D64. Danh sách mật khẩu phổ biến là file dữ liệu sinh bằng script, ghim nguồn và kiểm mã băm.** Nguồn:
+  danh sách 100k của NCSC (Anh, từ dữ liệu rò rỉ thật trên Have I Been Pwned), qua SecLists (giấy phép
+  MIT). Không phải thư viện, không có code chạy. `client-sdk/scripts/build-common-passwords.js` tải đúng
+  một commit cố định, kiểm SHA-256 (nguồn bị đổi dù một byte thì dừng và không ghi gì), lọc lấy mật khẩu
+  từ 8 ký tự TRƯỚC rồi mới lấy 3000 cái đầu (lọc sau thì danh sách toàn chuỗi ngắn vốn đã bị chặn), rồi
+  sinh `client-sdk/src/commonPasswords.js`. Kích thước khoảng 32 KB. Ứng dụng không gọi mạng để lấy danh
+  sách này.

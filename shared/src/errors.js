@@ -4,6 +4,9 @@
  */
 export const ERROR_CODES = Object.freeze({
   VALIDATION_ERROR: { status: 400, message: 'Dữ liệu gửi lên không hợp lệ.' },
+  // Chỉ client-sdk dùng: server không thấy mật khẩu nên không bao giờ tự trả mã này. Đặt ở đây để giao
+  // diện xử lý mọi lỗi theo cùng một cách, theo `code`.
+  WEAK_PASSWORD: { status: 400, message: 'Mật khẩu quá yếu.' },
   INVALID_CREDENTIALS: { status: 401, message: 'Email hoặc mật khẩu không đúng.' },
   UNAUTHENTICATED: { status: 401, message: 'Bạn chưa đăng nhập hoặc phiên đã hết hạn.' },
   FORBIDDEN: { status: 403, message: 'Bạn không có quyền thực hiện thao tác này.' },
