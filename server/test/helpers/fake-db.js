@@ -77,9 +77,10 @@ export function createFakeDb() {
     const out = {};
     for (const [key, spec] of Object.entries(select)) {
       if (spec === true) out[key] = row[key];
-      else if (key === 'sender') {
-        const sender = [...users.values()].find((u) => u.id === row.senderId);
-        out.sender = project(sender, spec.select);
+      else if (key === 'sender' || key === 'recipient') {
+        const userId = key === 'sender' ? row.senderId : row.recipientId;
+        const related = [...users.values()].find((u) => u.id === userId);
+        out[key] = project(related, spec.select);
       }
     }
     return clone(out);

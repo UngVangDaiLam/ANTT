@@ -21,6 +21,7 @@ import { Value } from '@sinclair/typebox/value';
 import {
   ErrorBody,
   NoteListResponse,
+  NoteShareListResponse,
   NoteResponse,
   NoteWriteResponse,
   SaltResponse,
@@ -121,6 +122,29 @@ export function createFetchTransport(baseUrl = '', { fetch: fetchImpl = globalTh
     async getNote(noteId) {
       const data = await callApi('GET', `/notes/${encodeURIComponent(noteId)}`);
       return assertSchema(NoteResponse, data, 'GET /api/notes/:id');
+    },
+
+    async updateNote(noteId, payload) {
+      const data = await callApi('PUT', `/notes/${encodeURIComponent(noteId)}`, payload);
+      return assertSchema(NoteWriteResponse, data, 'PUT /api/notes/:id');
+    },
+
+    async deleteNote(noteId) {
+      await callApi('DELETE', `/notes/${encodeURIComponent(noteId)}`);
+    },
+
+    async rotateNote(noteId, payload) {
+      const data = await callApi('POST', `/notes/${encodeURIComponent(noteId)}/rotate`, payload);
+      return assertSchema(NoteWriteResponse, data, 'POST /api/notes/:id/rotate');
+    },
+
+    async listNoteShares(noteId) {
+      const data = await callApi('GET', `/notes/${encodeURIComponent(noteId)}/shares`);
+      return assertSchema(NoteShareListResponse, data, 'GET /api/notes/:id/shares');
+    },
+
+    async deleteShare(shareId) {
+      await callApi('DELETE', `/shares/${encodeURIComponent(shareId)}`);
     },
 
     async shareNote(noteId, payload) {

@@ -2,6 +2,7 @@ import {
   AppError,
   EmailParams,
   IdParams,
+  NoteShareListResponse,
   RATE_LIMITS,
   ShareCreateRequest,
   ShareCreatedResponse,
@@ -97,6 +98,32 @@ export default async function shareRoutes(app) {
         if (err?.code === PRISMA_FOREIGN_KEY_VIOLATION) throw new AppError('NOT_FOUND');
         throw err;
       }
+    },
+  );
+
+  app.get(
+    '/notes/:id/shares',
+    { ...auth, schema: { params: IdParams, response: { 200: NoteShareListResponse } } },
+    async (request) => {
+      const { id: noteId } = request.params;
+      // Chỉ chủ note. Người khác, kể cả người đang được chia sẻ note này, nhận NOT_FOUND y như note
+      // không tồn tại (D30): họ không được biết note còn được chia sẻ cho những ai khác.
+      const note = await app.db.note.findFirst({
+        where: { id: noteId, ownerId: request.auth.userId },
+        select: { id: true },
+      });
+      if (!note) throw new AppError('NOT_FOUND');
+
+      const shares = await app.db.share.findMany({
+        where: { noteId },
+        orderBy: { createdAt: 'asc' },
+        select: { id: true, createdAt: true, recipient: { select: { email: true } } },
+      });
+      return shares.map((share) => ({
+        id: share.id,
+        recipientEmail: share.recipient.email,
+        createdAt: share.createdAt.toISOString(),
+      }));
     },
   );
 

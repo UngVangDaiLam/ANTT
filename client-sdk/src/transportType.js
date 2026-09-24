@@ -30,6 +30,14 @@
  * @property {() => Promise<Array<object>>} listNotes GET /api/notes — không kèm nội dung
  * @property {(noteId: string) => Promise<object>} getNote
  *   GET /api/notes/:id — chủ note nhận wrappedNoteKey, người được chia sẻ nhận share (D22)
+ * @property {(noteId: string, payload: object) => Promise<{id: string, version: number, updatedAt: string}>} updateNote
+ *   PUT /api/notes/:id — version phải = hiện tại + 1 (D18)
+ * @property {(noteId: string) => Promise<void>} deleteNote DELETE /api/notes/:id
+ * @property {(noteId: string, payload: object) => Promise<{id: string, version: number, updatedAt: string}>} rotateNote
+ *   POST /api/notes/:id/rotate — xoay khóa để thu hồi quyền (D24, D50)
+ * @property {(noteId: string) => Promise<Array<{id: string, recipientEmail: string, createdAt: string}>>} listNoteShares
+ *   GET /api/notes/:id/shares — chỉ chủ note
+ * @property {(shareId: string) => Promise<void>} deleteShare DELETE /api/shares/:id — chỉ người gửi
  * @property {(noteId: string, payload: object) => Promise<{id: string}>} shareNote
  *   POST /api/notes/:id/shares
  * @property {() => Promise<Array<object>>} listSharedWithMe GET /api/shares

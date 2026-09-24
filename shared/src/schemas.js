@@ -327,3 +327,15 @@ export const ShareListItem = Type.Object(
 );
 
 export const ShareListResponse = Type.Array(ShareListItem);
+
+/**
+ * Một dòng trong GET /api/notes/:id/shares: note CỦA MÌNH đang được chia sẻ cho ai. Chỉ chủ note
+ * xem được. Cần để huỷ chia sẻ (lấy `id`) và để xoay khóa (biết danh sách người còn quyền, D50).
+ * Không trả gói chia sẻ: chủ note không cần, và không có lý do gì để nó đi qua mạng thêm lần nữa.
+ */
+export const NoteShareListItem = Type.Object(
+  { id: Uuid, recipientEmail: NormalizedEmail, createdAt: IsoDateTime },
+  strict,
+);
+
+export const NoteShareListResponse = Type.Array(NoteShareListItem);

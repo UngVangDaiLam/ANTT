@@ -1,4 +1,5 @@
-import { describe, test, expect } from 'vitest';
+import { beforeEach, describe, test, expect } from 'vitest';
+import { fromBase64, note as noteCrypto, sharing } from '@secure-notes/crypto';
 import { KDF_DEFAULTS, LIMITS } from '@secure-notes/shared';
 import { SecureNoteClient } from '../src/client.js';
 import { createMemoryServer, createMemoryTransport } from '../src/memoryTransport.js';
@@ -326,5 +327,244 @@ describe('memoryTransport là bản kiểm tra hợp đồng API, không chỉ l
     expect(lan1.salt).toBe(lan2.salt);
     expect(lan1.salt).not.toBe(khac.salt);
     expect(lan1.kdfParams).toEqual({ ...KDF_DEFAULTS });
+  });
+});
+
+describe('sửa, xóa, chia sẻ và thu hồi quyền', () => {
+  let server;
+  let alice;
+  let bob;
+
+  beforeEach(async () => {
+    server = createMemoryServer();
+    alice = newClient(server);
+    bob = newClient(server);
+    await alice.register('alice@example.com', 'mk-alice-dai');
+    await bob.register('bob@example.com', 'mk-bob-dai');
+  });
+
+  /** Alice tạo một note rồi chia sẻ cho từng người trong danh sách. */
+  async function sharedNote(recipients, input = { title: 'Kế hoạch', content: 'Nội dung gốc' }) {
+    const { id } = await alice.createNote(input);
+    for (const email of recipients) await alice.shareNote(id, email);
+    return id;
+  }
+
+  describe('updateNote', () => {
+    test('sửa thành công: version tăng, người được chia sẻ đọc được bản mới mà không cần gói mới', async () => {
+      const id = await sharedNote(['bob@example.com']);
+      const opened = await alice.readNote(id);
+
+      const res = await alice.updateNote(id, {
+        title: 'Kế hoạch v2',
+        content: 'Nội dung mới',
+        version: opened.version,
+      });
+
+      expect(res.version).toBe(2);
+      expect(await alice.readNote(id)).toMatchObject({
+        title: 'Kế hoạch v2',
+        content: 'Nội dung mới',
+        version: 2,
+      });
+      expect((await bob.readNote(id)).content).toBe('Nội dung mới');
+      expect((await alice.listNotes())[0].title).toBe('Kế hoạch v2');
+    });
+
+    test('hai thiết bị cùng sửa từ một bản: bản lưu sau bị từ chối, không ghi đè bản trước', async () => {
+      const { id } = await alice.createNote({ title: 'T', content: 'Gốc' });
+      const phone = newClient(server);
+      await phone.login('alice@example.com', 'mk-alice-dai');
+      const onLaptop = await alice.readNote(id);
+      const onPhone = await phone.readNote(id);
+
+      await alice.updateNote(id, { title: 'T', content: 'Từ laptop', version: onLaptop.version });
+      const late = phone.updateNote(id, {
+        title: 'T',
+        content: 'Từ điện thoại',
+        version: onPhone.version,
+      });
+
+      await expect(late).rejects.toBeInstanceOf(ApiError);
+      await expect(late).rejects.toMatchObject({ code: 'VERSION_CONFLICT' });
+      expect((await alice.readNote(id)).content).toBe('Từ laptop');
+    });
+
+    test('thiếu version hoặc version không hợp lệ bị từ chối ngay', async () => {
+      const { id } = await alice.createNote({ title: 'T', content: 'C' });
+      for (const version of [undefined, 0, 1.5, '1']) {
+        await expect(alice.updateNote(id, { title: 'T', content: 'X', version })).rejects.toThrow(
+          TypeError,
+        );
+      }
+      expect((await alice.readNote(id)).content).toBe('C');
+    });
+
+    test('người được chia sẻ không sửa được note, nội dung giữ nguyên', async () => {
+      const id = await sharedNote(['bob@example.com']);
+      await expect(
+        bob.updateNote(id, { title: 'Hack', content: 'Bị sửa', version: 1 }),
+      ).rejects.toThrow('không phải chủ');
+      expect((await alice.readNote(id)).content).toBe('Nội dung gốc');
+    });
+
+    test('người không liên quan nhận NOT_FOUND', async () => {
+      const { id } = await alice.createNote({ title: 'T', content: 'C' });
+      await expect(
+        bob.updateNote(id, { title: 'T', content: 'X', version: 1 }),
+      ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    });
+
+    test('tiêu đề mới quá lớn bị chặn ở client', async () => {
+      const { id } = await alice.createNote({ title: 'T', content: 'C' });
+      const tooBig = 'a'.repeat(LIMITS.MAX_NOTE_TITLE_BYTES + 1);
+      await expect(
+        alice.updateNote(id, { title: tooBig, content: 'C', version: 1 }),
+      ).rejects.toThrow('Tiêu đề note');
+      expect((await alice.readNote(id)).version).toBe(1);
+    });
+  });
+
+  describe('deleteNote', () => {
+    test('chủ note xóa được; note và gói chia sẻ của nó biến mất', async () => {
+      const id = await sharedNote(['bob@example.com']);
+
+      await alice.deleteNote(id);
+
+      expect(await alice.listNotes()).toEqual([]);
+      await expect(alice.readNote(id)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+      await expect(bob.readNote(id)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+      expect(await bob.listSharedWithMe()).toEqual([]);
+    });
+
+    test('người được chia sẻ và người ngoài không xóa được', async () => {
+      const id = await sharedNote(['bob@example.com']);
+      const eve = newClient(server);
+      await eve.register('eve@example.com', 'mk-eve-dai');
+
+      await expect(bob.deleteNote(id)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+      await expect(eve.deleteNote(id)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+      expect((await alice.readNote(id)).content).toBe('Nội dung gốc');
+    });
+  });
+
+  describe('listNoteShares và unshareNote', () => {
+    test('chủ note thấy danh sách người nhận; người nhận thì không', async () => {
+      const carol = newClient(server);
+      await carol.register('carol@example.com', 'mk-carol-dai');
+      const id = await sharedNote(['bob@example.com', 'carol@example.com']);
+
+      const list = await alice.listNoteShares(id);
+
+      expect(list.map((s) => s.recipientEmail)).toEqual(['bob@example.com', 'carol@example.com']);
+      await expect(bob.listNoteShares(id)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    });
+
+    test('gỡ chia sẻ: người nhận mất quyền đọc qua server', async () => {
+      const id = await sharedNote(['bob@example.com']);
+      const [share] = await alice.listNoteShares(id);
+
+      await alice.unshareNote(share.id);
+
+      await expect(bob.readNote(id)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+      expect(await alice.listNoteShares(id)).toEqual([]);
+    });
+
+    test('người nhận không tự gỡ được gói chia sẻ (chỉ người gửi)', async () => {
+      const id = await sharedNote(['bob@example.com']);
+      const [share] = await alice.listNoteShares(id);
+
+      await expect(bob.unshareNote(share.id)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+      expect((await bob.readNote(id)).content).toBe('Nội dung gốc');
+    });
+  });
+
+  describe('revokeAccess (xoay khóa, D24)', () => {
+    let carol;
+
+    beforeEach(async () => {
+      carol = newClient(server);
+      await carol.register('carol@example.com', 'mk-carol-dai');
+    });
+
+    test('thu hồi Bob, giữ Carol: Bob mất quyền, Carol và Alice vẫn đọc được', async () => {
+      const id = await sharedNote(['bob@example.com', 'carol@example.com']);
+
+      const res = await alice.revokeAccess(id, ['BOB@example.com']);
+
+      expect(res).toMatchObject({ id, version: 2, keptRecipients: ['carol@example.com'] });
+      await expect(bob.readNote(id)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+      expect(await alice.readNote(id)).toMatchObject({
+        title: 'Kế hoạch',
+        content: 'Nội dung gốc',
+      });
+      expect((await carol.readNote(id)).content).toBe('Nội dung gốc');
+      expect((await alice.listNoteShares(id)).map((s) => s.recipientEmail)).toEqual([
+        'carol@example.com',
+      ]);
+    });
+
+    test('là thu hồi MẬT MÃ: khóa cũ Bob có thể đã giữ lại không mở được nội dung mới', async () => {
+      const id = await sharedNote(['bob@example.com', 'carol@example.com']);
+      // Bob đã mở note trước đó, nên có thể đã giữ gói chia sẻ (và khóa note) cũ.
+      const before = await bob.transport.getNote(id);
+      const aliceKeys = await bob.transport.getUserKeys('alice@example.com');
+      const oldKey = await sharing.unwrapNoteKeyFromSender(
+        before.share.sharePackage,
+        bob._session.x25519PrivateKey,
+        fromBase64(aliceKeys.ed25519PublicKey),
+      );
+      // Khóa cũ đúng là khóa thật: mở được nội dung cũ.
+      expect(await noteCrypto.decryptNote(before.encryptedContent, oldKey)).toBe('Nội dung gốc');
+
+      await alice.revokeAccess(id, ['bob@example.com']);
+
+      const after = await carol.transport.getNote(id);
+      expect(after.encryptedContent).not.toEqual(before.encryptedContent);
+      await expect(noteCrypto.decryptNote(after.encryptedContent, oldKey)).rejects.toThrow();
+      await expect(noteCrypto.decryptNote(after.encryptedTitle, oldKey)).rejects.toThrow();
+    });
+
+    test('email không nằm trong danh sách chia sẻ: báo lỗi và không đổi gì', async () => {
+      const id = await sharedNote(['bob@example.com']);
+
+      await expect(alice.revokeAccess(id, ['carol@example.com'])).rejects.toThrow(
+        'không được chia sẻ cho: carol@example.com',
+      );
+      expect((await alice.readNote(id)).version).toBe(1);
+      expect((await bob.readNote(id)).content).toBe('Nội dung gốc');
+    });
+
+    test('danh sách rỗng: chỉ xoay khóa, mọi người giữ quyền', async () => {
+      const id = await sharedNote(['bob@example.com']);
+      const keyBefore = (await alice.transport.getNote(id)).wrappedNoteKey;
+
+      const res = await alice.revokeAccess(id, []);
+
+      expect(res).toMatchObject({ version: 2, keptRecipients: ['bob@example.com'] });
+      expect((await alice.transport.getNote(id)).wrappedNoteKey).not.toEqual(keyBefore);
+      expect((await bob.readNote(id)).content).toBe('Nội dung gốc');
+    });
+
+    test('người được chia sẻ không thu hồi được quyền của người khác', async () => {
+      const id = await sharedNote(['bob@example.com', 'carol@example.com']);
+      await expect(bob.revokeAccess(id, ['carol@example.com'])).rejects.toThrow('không phải chủ');
+      expect((await carol.readNote(id)).content).toBe('Nội dung gốc');
+    });
+
+    test('sửa note sau khi thu hồi: người còn quyền đọc được, người bị thu hồi thì không', async () => {
+      const id = await sharedNote(['bob@example.com', 'carol@example.com']);
+      await alice.revokeAccess(id, ['bob@example.com']);
+      const current = await alice.readNote(id);
+
+      await alice.updateNote(id, {
+        title: 'Sau thu hồi',
+        content: 'Bản mới',
+        version: current.version,
+      });
+
+      expect((await carol.readNote(id)).content).toBe('Bản mới');
+      await expect(bob.readNote(id)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    });
   });
 });

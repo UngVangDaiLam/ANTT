@@ -201,12 +201,13 @@ mới bằng Vault Key, rồi gửi kèm một gói chia sẻ mới cho **mỗi*
 Mọi route đều cần đăng nhập — kể cả tra khóa công khai, để người lạ không dùng nó dò xem email nào
 đã có tài khoản.
 
-| Method | Đường dẫn                | Ghi chú                                                                   |
-| ------ | ------------------------ | ------------------------------------------------------------------------- |
-| GET    | `/api/users/:email/keys` | **UserKeysResponse**; email không tồn tại trả `404 NOT_FOUND`             |
-| POST   | `/api/notes/:id/shares`  | **ShareCreateRequest** → **ShareCreatedResponse**; chỉ chủ note           |
-| GET    | `/api/shares`            | **ShareListResponse**: gói chia sẻ gửi cho mình (người nhận lấy từ phiên) |
-| DELETE | `/api/shares/:id`        | Chỉ người gửi; `204`                                                      |
+| Method | Đường dẫn                | Ghi chú                                                                    |
+| ------ | ------------------------ | -------------------------------------------------------------------------- |
+| GET    | `/api/users/:email/keys` | **UserKeysResponse**; email không tồn tại trả `404 NOT_FOUND`              |
+| POST   | `/api/notes/:id/shares`  | **ShareCreateRequest** → **ShareCreatedResponse**; chỉ chủ note            |
+| GET    | `/api/notes/:id/shares`  | **NoteShareListResponse**: note của mình đang chia sẻ cho ai; chỉ chủ note |
+| GET    | `/api/shares`            | **ShareListResponse**: gói chia sẻ gửi cho mình (người nhận lấy từ phiên)  |
+| DELETE | `/api/shares/:id`        | Chỉ người gửi; `204`                                                       |
 
 `sharePackage` = `{ ephemeralPublicKey, nonce, ciphertext, signature }`, chữ ký bao gồm noteId.
 
@@ -221,6 +222,9 @@ Người nhận đọc nội dung qua `GET /api/notes/:noteId`, **không** có r
   giảm nhẹ bằng rate limit của `/users/:email/keys`.
 - `DELETE /api/shares/:id` chỉ chặn lần đọc **sau** qua API. Nó **không** thu hồi được khóa mà người nhận
   đã giải mã và có thể đã giữ lại; muốn thu hồi thật sự phải xoay khóa note (`rotate`, D24, D53).
+- `GET /api/notes/:id/shares` chỉ trả `{ id, recipientEmail, createdAt }`, không trả gói chia sẻ. Cần để
+  gỡ chia sẻ (lấy `id`) và để xoay khóa (biết danh sách người còn quyền, D50). Người được chia sẻ gọi
+  route này nhận `404`: họ không được biết note còn chia sẻ cho ai khác (D60).
 - `GET /api/notes` và `GET /api/shares` chưa phân trang: trả toàn bộ.
 
 ## Giới hạn kích thước

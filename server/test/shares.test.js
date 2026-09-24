@@ -173,6 +173,60 @@ describe.each(backends)('chia sẻ [$name]', (backend) => {
     });
   });
 
+  describe('GET /api/notes/:id/shares', () => {
+    const recipients = (user, noteId) => user.req('GET', `/api/notes/${noteId}/shares`);
+
+    test('chủ note thấy note đang được chia sẻ cho ai, không kèm gói chia sẻ', async () => {
+      const carol = await h.signUp('carol@example.com');
+      const pkg = sharePackage();
+      const toBob = (await share(alice, note.id, 'bob@example.com', pkg)).json().id;
+      await tick();
+      const toCarol = (await share(alice, note.id, carol.email)).json().id;
+
+      const res = await recipients(alice, note.id);
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().map((s) => [s.id, s.recipientEmail])).toEqual([
+        [toBob, 'bob@example.com'],
+        [toCarol, 'carol@example.com'],
+      ]);
+      for (const item of res.json()) {
+        expect(Object.keys(item).sort()).toEqual(['createdAt', 'id', 'recipientEmail']);
+      }
+      expect(res.body).not.toContain(pkg.ciphertext);
+    });
+
+    test('note chưa chia sẻ cho ai trả mảng rỗng', async () => {
+      const res = await recipients(alice, note.id);
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual([]);
+    });
+
+    test('người được chia sẻ KHÔNG xem được note còn chia sẻ cho những ai khác', async () => {
+      await share(alice, note.id, 'bob@example.com');
+      const res = await recipients(bob, note.id);
+      expect(res.statusCode).toBe(404);
+      expect(res.json().code).toBe('NOT_FOUND');
+    });
+
+    test('note của người khác và note không tồn tại cho ra cùng một response (D30)', async () => {
+      const notYours = await recipients(bob, note.id);
+      const nonexistent = await recipients(bob, crypto.randomUUID());
+      expect(notYours.statusCode).toBe(404);
+      expect(notYours.json()).toEqual(nonexistent.json());
+    });
+
+    test('share đã xóa không còn trong danh sách', async () => {
+      const shareId = (await share(alice, note.id, 'bob@example.com')).json().id;
+      await alice.req('DELETE', `/api/shares/${shareId}`);
+      expect((await recipients(alice, note.id)).json()).toEqual([]);
+    });
+
+    test('id sai định dạng bị từ chối', async () => {
+      expect((await recipients(alice, 'khong-phai-uuid')).statusCode).toBe(400);
+    });
+  });
+
   describe('GET /api/shares', () => {
     test('chỉ trả tham chiếu tối thiểu: không có gói chia sẻ, không có ciphertext', async () => {
       const pkg = sharePackage();

@@ -17,6 +17,7 @@
 
 import { getSodium, kdf, vault, note, sharing, toBase64, fromBase64 } from '@secure-notes/crypto';
 import { KDF_DEFAULTS, LIMITS, NOTE_VERSION_START, normalizeEmail } from '@secure-notes/shared';
+import { ApiError } from './apiError.js';
 
 // client-sdk KHÔNG tự import libsodium-wrappers-sumo: mọi thao tác mật mã đi
 // qua @secure-notes/crypto để chỉ một chỗ duy nhất trong repo chạm vào thư viện.
@@ -363,10 +364,7 @@ export class SecureNoteClient {
     const normalizedRecipient = normalizeEmail(recipientEmail);
 
     const record = await this.transport.getNote(noteId);
-    if (!record.wrappedNoteKey) {
-      throw new Error('Bạn không phải chủ note này, không thể chia sẻ.');
-    }
-    const noteKey = await vault.unwrapVaultKey(record.wrappedNoteKey, session.vaultKey);
+    const noteKey = await this._ownedNoteKey(record, session);
 
     const recipientKeys = await this.transport.getUserKeys(normalizedRecipient);
     const sharePackage = await sharing.wrapNoteKeyForRecipient(
@@ -380,6 +378,163 @@ export class SecureNoteClient {
       recipientEmail: normalizedRecipient,
       sharePackage,
     });
+  }
+
+  /**
+   * Sửa tiêu đề và nội dung một note của mình. Khóa note giữ nguyên, nên người
+   * đang được chia sẻ đọc được bản mới mà không cần gói chia sẻ mới.
+   *
+   * `version` là version của bản mà người dùng ĐANG SỬA (lấy từ readNote), không
+   * phải version mới nhất trên server. Nếu trong lúc sửa, thiết bị khác đã lưu một
+   * bản mới hơn, thao tác này thất bại với VERSION_CONFLICT thay vì âm thầm ghi đè
+   * lên thay đổi của thiết bị kia (D18). Giao diện nên báo người dùng tải lại.
+   *
+   * @param {string} noteId
+   * @param {{title: string, content: string, version: number}} input
+   * @returns {Promise<{id: string, version: number, updatedAt: string}>}
+   */
+  async updateNote(noteId, { title, content, version }) {
+    await ready();
+    const session = this._requireSession();
+    if (!Number.isInteger(version) || version < NOTE_VERSION_START) {
+      throw new TypeError('version phải là version của bản đang sửa (số nguyên >= 1).');
+    }
+    assertPlaintextSize('Nội dung note', content, LIMITS.MAX_NOTE_PLAINTEXT_BYTES);
+    assertPlaintextSize('Tiêu đề note', title, LIMITS.MAX_NOTE_TITLE_BYTES);
+
+    const record = await this.transport.getNote(noteId);
+    // Server sẽ từ chối y như vậy; kiểm tra sớm để khỏi mã hóa và gửi đi vô ích.
+    if (record.version !== version) {
+      throw new ApiError('VERSION_CONFLICT', 'Note đã bị thay đổi ở nơi khác, hãy tải lại.');
+    }
+    const noteKey = await this._ownedNoteKey(record, session);
+
+    const payload = {
+      version: version + 1,
+      encryptedTitle: await note.encryptNote(title, noteKey),
+      encryptedContent: await note.encryptNote(content, noteKey),
+    };
+    sodium.memzero(noteKey);
+
+    return this.transport.updateNote(noteId, payload);
+  }
+
+  /**
+   * Xóa một note của mình. Mọi gói chia sẻ của note cũng bị xóa theo.
+   * @param {string} noteId
+   * @returns {Promise<void>}
+   */
+  async deleteNote(noteId) {
+    this._requireSession();
+    await this.transport.deleteNote(noteId);
+  }
+
+  /**
+   * Note của mình đang được chia sẻ cho những ai.
+   * @param {string} noteId
+   * @returns {Promise<Array<{id: string, recipientEmail: string, createdAt: string}>>}
+   */
+  async listNoteShares(noteId) {
+    this._requireSession();
+    return this.transport.listNoteShares(noteId);
+  }
+
+  /**
+   * Gỡ một gói chia sẻ. CHỈ chặn lần đọc sau qua server — KHÔNG phải thu hồi mật
+   * mã: người nhận đã từng mở note thì có thể đã giữ lại khóa note, và vẫn giải mã
+   * được nếu có được ciphertext (ví dụ từ bản sao lưu, hoặc từ một server gian lận).
+   * Muốn thu hồi thật sự, dùng revokeAccess() (D53).
+   *
+   * @param {string} shareId id lấy từ listNoteShares()
+   * @returns {Promise<void>}
+   */
+  async unshareNote(shareId) {
+    this._requireSession();
+    await this.transport.deleteShare(shareId);
+  }
+
+  /**
+   * Thu hồi quyền truy cập bằng cách XOAY KHÓA note (D24, D50):
+   *  1. sinh khóa note mới và mã hóa lại tiêu đề, nội dung;
+   *  2. tạo gói chia sẻ mới (chứa khóa mới) cho những người còn giữ quyền;
+   *  3. gửi tất cả trong một yêu cầu, server áp dụng trong một transaction.
+   *
+   * Người bị thu hồi mất gói chia sẻ, và khóa cũ họ có thể đã giữ lại không mở được
+   * nội dung mới. Họ vẫn giữ được những gì ĐÃ đọc trước đó — không kỹ thuật nào lấy
+   * lại được thứ đã lộ.
+   *
+   * Danh sách rỗng nghĩa là chỉ xoay khóa, giữ nguyên mọi người (ví dụ khi nghi ngờ
+   * khóa cũ bị lộ).
+   *
+   * Giới hạn: danh sách người nhận được đọc ngay trước khi xoay. Nếu đúng lúc đó một
+   * thiết bị khác của chính bạn vừa chia sẻ note cho người mới, người đó cũng bị gỡ.
+   *
+   * @param {string} noteId
+   * @param {string[]} recipientEmails những người bị thu hồi quyền
+   * @returns {Promise<{id: string, version: number, updatedAt: string, keptRecipients: string[]}>}
+   */
+  async revokeAccess(noteId, recipientEmails) {
+    await ready();
+    const session = this._requireSession();
+
+    const record = await this.transport.getNote(noteId);
+    const oldKey = await this._ownedNoteKey(record, session);
+    let title;
+    let content;
+    try {
+      title = await note.decryptNote(record.encryptedTitle, oldKey);
+      content = await note.decryptNote(record.encryptedContent, oldKey);
+    } finally {
+      sodium.memzero(oldKey);
+    }
+
+    const current = (await this.transport.listNoteShares(noteId)).map((s) => s.recipientEmail);
+    const revoked = new Set(recipientEmails.map(normalizeEmail));
+    const unknown = [...revoked].filter((email) => !current.includes(email));
+    if (unknown.length > 0) {
+      // Nhiều khả năng là gõ nhầm email; xoay khóa rồi mới phát hiện thì người dùng
+      // lại tưởng đã thu hồi được quyền của ai đó.
+      throw new Error(`Note này không được chia sẻ cho: ${unknown.join(', ')}.`);
+    }
+    const kept = current.filter((email) => !revoked.has(email));
+
+    const newKey = vault.generateVaultKey();
+    try {
+      const shares = [];
+      for (const recipientEmail of kept) {
+        const keys = await this.transport.getUserKeys(recipientEmail);
+        shares.push({
+          recipientEmail,
+          sharePackage: await sharing.wrapNoteKeyForRecipient(
+            newKey,
+            fromBase64(keys.x25519PublicKey),
+            session.ed25519PrivateKey,
+          ),
+        });
+      }
+
+      const result = await this.transport.rotateNote(noteId, {
+        version: record.version + 1,
+        encryptedTitle: await note.encryptNote(title, newKey),
+        encryptedContent: await note.encryptNote(content, newKey),
+        wrappedNoteKey: await vault.wrapVaultKey(newKey, session.vaultKey),
+        shares,
+      });
+      return { ...result, keptRecipients: kept };
+    } finally {
+      sodium.memzero(newKey);
+    }
+  }
+
+  /**
+   * Mở khóa note của một note mà người gọi LÀ CHỦ. Note được chia sẻ (chỉ có
+   * `share`, không có `wrappedNoteKey`) thì không sửa, xóa hay chia sẻ tiếp được.
+   */
+  async _ownedNoteKey(record, session) {
+    if (!record.wrappedNoteKey) {
+      throw new Error('Bạn không phải chủ note này.');
+    }
+    return vault.unwrapVaultKey(record.wrappedNoteKey, session.vaultKey);
   }
 
   /**

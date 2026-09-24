@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@secure-notes/client-sdk": "workspace:*",
+    "@secure-notes/crypto": "workspace:*",
     "@secure-notes/server": "workspace:*",
     "@secure-notes/shared": "workspace:*"
   },

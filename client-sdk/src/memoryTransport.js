@@ -28,7 +28,10 @@ import {
   NoteCreateRequest,
   NoteListResponse,
   NoteResponse,
+  NoteShareListResponse,
+  NoteUpdateRequest,
   NoteWriteResponse,
+  RotateRequest,
   RegisterRequest,
   SaltResponse,
   SelfAccountResponse,
@@ -89,6 +92,15 @@ export function createMemoryServer() {
       if (!sessionEmail) throw new ApiError('UNAUTHENTICATED', 'Chưa đăng nhập.');
       return sessionEmail;
     }
+
+    const notFound = () => new ApiError('NOT_FOUND', 'Không tìm thấy.');
+    const versionConflict = () =>
+      new ApiError('VERSION_CONFLICT', 'Note đã bị thay đổi ở nơi khác, hãy tải lại.');
+    const writeResult = (record) => ({
+      id: record.id,
+      version: record.version,
+      updatedAt: record.updatedAt,
+    });
 
     return {
       async register(payload) {
@@ -256,6 +268,103 @@ export function createMemoryServer() {
           createdAt: existing ? existing.createdAt : new Date().toISOString(),
         });
         return assertSchema(ShareCreatedResponse, { id }, 'POST /api/notes/:id/shares');
+      },
+
+      async updateNote(noteId, payload) {
+        const email = requireSession();
+        checkRequest(NoteUpdateRequest, payload, 'PUT /api/notes/:id');
+        const record = notes.get(noteId);
+        // Người được chia sẻ cũng không sửa được: chỉ chủ note (D30: trả NOT_FOUND).
+        if (!record || record.ownerEmail !== email) throw notFound();
+        // D18: chỉ nhận đúng version hiện tại + 1.
+        if (payload.version !== record.version + 1) throw versionConflict();
+        record.version = payload.version;
+        record.encryptedTitle = payload.encryptedTitle;
+        record.encryptedContent = payload.encryptedContent;
+        record.updatedAt = new Date().toISOString();
+        return assertSchema(NoteWriteResponse, writeResult(record), 'PUT /api/notes/:id');
+      },
+
+      async deleteNote(noteId) {
+        const email = requireSession();
+        const record = notes.get(noteId);
+        if (!record || record.ownerEmail !== email) throw notFound();
+        notes.delete(noteId);
+        // Như onDelete: Cascade của Prisma: gói chia sẻ của note bị xóa theo.
+        for (const [id, share] of shares) if (share.noteId === noteId) shares.delete(id);
+      },
+
+      async rotateNote(noteId, payload) {
+        const email = requireSession();
+        checkRequest(RotateRequest, payload, 'POST /api/notes/:id/rotate');
+        const record = notes.get(noteId);
+        if (!record || record.ownerEmail !== email) throw notFound();
+        if (payload.version !== record.version + 1) throw versionConflict();
+
+        // Kiểm tra HẾT trước khi đổi bất cứ thứ gì: server thật chạy trong một transaction,
+        // lỗi ở bất kỳ bước nào thì không có gì thay đổi.
+        const keep = payload.shares.map((entry) => ({
+          recipientEmail: normalizeEmail(entry.recipientEmail),
+          sharePackage: entry.sharePackage,
+        }));
+        const emails = keep.map((entry) => entry.recipientEmail);
+        if (new Set(emails).size !== emails.length) {
+          throw new ApiError('VALIDATION_ERROR', 'Danh sách người nhận có email bị lặp.');
+        }
+        if (emails.some((recipient) => !users.has(recipient))) {
+          throw new ApiError('NOT_FOUND', 'Không tìm thấy một trong những người nhận.');
+        }
+        if (emails.includes(email)) {
+          throw new ApiError('VALIDATION_ERROR', 'Không thể chia sẻ cho chính mình.');
+        }
+
+        record.version = payload.version;
+        record.encryptedTitle = payload.encryptedTitle;
+        record.encryptedContent = payload.encryptedContent;
+        record.wrappedNoteKey = payload.wrappedNoteKey;
+        record.updatedAt = new Date().toISOString();
+
+        // Tập người nhận sau khi xoay ĐÚNG BẰNG danh sách gửi lên (D50).
+        const existing = [...shares.values()].filter((share) => share.noteId === noteId);
+        for (const share of existing) {
+          if (!emails.includes(share.recipientEmail)) shares.delete(share.id);
+        }
+        for (const entry of keep) {
+          const old = existing.find((share) => share.recipientEmail === entry.recipientEmail);
+          const id = old ? old.id : globalThis.crypto.randomUUID();
+          shares.set(id, {
+            id,
+            noteId,
+            senderEmail: email,
+            recipientEmail: entry.recipientEmail,
+            sharePackage: entry.sharePackage,
+            createdAt: old ? old.createdAt : new Date().toISOString(),
+          });
+        }
+        return assertSchema(NoteWriteResponse, writeResult(record), 'POST /api/notes/:id/rotate');
+      },
+
+      async listNoteShares(noteId) {
+        const email = requireSession();
+        const record = notes.get(noteId);
+        // Người được chia sẻ không được biết note còn chia sẻ cho ai khác.
+        if (!record || record.ownerEmail !== email) throw notFound();
+        const body = [...shares.values()]
+          .filter((share) => share.noteId === noteId)
+          .map((share) => ({
+            id: share.id,
+            recipientEmail: share.recipientEmail,
+            createdAt: share.createdAt,
+          }));
+        return assertSchema(NoteShareListResponse, body, 'GET /api/notes/:id/shares');
+      },
+
+      async deleteShare(shareId) {
+        const email = requireSession();
+        const share = shares.get(shareId);
+        // Chỉ người gửi; người nhận hay người ngoài đều nhận NOT_FOUND.
+        if (!share || share.senderEmail !== email) throw notFound();
+        shares.delete(shareId);
       },
 
       async listSharedWithMe() {

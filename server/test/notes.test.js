@@ -591,6 +591,7 @@ describe.each(backends)('route cần đăng nhập [$name]', (backend) => {
     ['DELETE', `/api/notes/${id}`],
     ['POST', `/api/notes/${id}/rotate`],
     ['POST', `/api/notes/${id}/shares`],
+    ['GET', `/api/notes/${id}/shares`],
     ['GET', '/api/shares'],
     ['DELETE', `/api/shares/${id}`],
     ['GET', '/api/users/bob%40example.com/keys'],

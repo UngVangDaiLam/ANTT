@@ -61,6 +61,9 @@ importers:
       '@secure-notes/client-sdk':
         specifier: workspace:*
         version: link:../client-sdk
+      '@secure-notes/crypto':
+        specifier: workspace:*
+        version: link:../crypto
       '@secure-notes/server':
         specifier: workspace:*
         version: link:../server

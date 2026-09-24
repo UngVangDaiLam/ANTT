@@ -201,3 +201,21 @@ nếu đổi ý thì ghi quyết định mới thay thế.
   thì test Postgres lỗi `Cannot find module '.prisma/client/default'`). Việc chạy `migrate deploy` trên
   database trống ở mỗi lần CI cũng là phép thử miễn phí rằng migration áp được từ đầu. Workflow đã được
   mô phỏng từng bước trên một bản sao sạch của repo trước khi đẩy lên.
+
+## Sửa, xóa và thu hồi quyền ở client
+
+- **D60. Thêm `GET /api/notes/:id/shares` (chỉ chủ note).** Hợp đồng cũ thiếu cách để chủ note biết note
+  đang được chia sẻ cho ai: `GET /api/shares` chỉ trả các gói người khác gửi CHO MÌNH. Không có nó thì
+  không lấy được `shareId` để gỡ chia sẻ, và không biết danh sách người còn quyền để xoay khóa (D50).
+  Không trả gói chia sẻ (chủ note không cần). Người được chia sẻ nhận `404` (D30).
+- **D61. `updateNote` bắt buộc truyền `version` của bản người dùng ĐANG SỬA.** Nếu SDK tự đọc version mới
+  nhất rồi +1, hai thiết bị cùng sửa một note sẽ âm thầm ghi đè lên nhau và D18 trở nên vô dụng. SDK
+  kiểm tra version trước khi mã hóa để khỏi gửi đi vô ích; server vẫn là nơi quyết định cuối cùng.
+- **D62. `revokeAccess(noteId, emails)` là thu hồi MẬT MÃ, `unshareNote(shareId)` thì không.**
+  `revokeAccess` giải mã nội dung, sinh khóa note mới, mã hóa lại, tạo gói chia sẻ mới cho từng người
+  còn quyền rồi gọi `rotate` — khóa cũ mà người bị thu hồi có thể đã giữ không mở được nội dung mới (có
+  test kiểm chứng trực tiếp bằng khóa cũ). `unshareNote` chỉ xóa gói chia sẻ ở server (D53). Email
+  không nằm trong danh sách chia sẻ thì báo lỗi TRƯỚC khi xoay khóa, vì nhiều khả năng là gõ nhầm và
+  người dùng sẽ tưởng đã thu hồi được quyền của ai đó. Danh sách rỗng nghĩa là chỉ xoay khóa, giữ nguyên
+  mọi người. **Giới hạn:** danh sách người nhận được đọc ngay trước khi xoay; nếu đúng lúc đó một thiết
+  bị khác của chính chủ note vừa chia sẻ cho người mới, người đó cũng bị gỡ.
