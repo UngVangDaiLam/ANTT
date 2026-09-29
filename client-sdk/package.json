@@ -1,0 +1,22 @@
+{
+  "name": "@secure-notes/client-sdk",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "[Lâm] Lớp cầu nối: gọi crypto/ và API server, trả kết quả đơn giản cho giao diện.",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "scripts": {
+    "test": "vitest run --passWithNoTests",
+    "build:common-passwords": "node scripts/build-common-passwords.js"
+  },
+  "dependencies": {
+    "@secure-notes/crypto": "workspace:*",
+    "@secure-notes/shared": "workspace:*",
+    "@sinclair/typebox": "^0.34.52"
+  },
+  "devDependencies": {
+    "vitest": "^5.0.1"
+  }
+}

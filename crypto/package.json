@@ -1,0 +1,21 @@
+{
+  "name": "@secure-notes/crypto",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "[Lâm] Module mật mã thuần: không gọi mạng, không biết server tồn tại.",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "benchmark": "node benchmark/argon2-benchmark.js"
+  },
+  "dependencies": {
+    "@secure-notes/shared": "workspace:*",
+    "libsodium-wrappers-sumo": "^0.8.4"
+  },
+  "devDependencies": {
+    "vitest": "^5.0.1"
+  }
+}

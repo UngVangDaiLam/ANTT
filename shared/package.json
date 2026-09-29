@@ -1,0 +1,19 @@
+{
+  "name": "@secure-notes/shared",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Schema API, hằng số cấu hình và mã lỗi dùng chung. KHÔNG chứa mật mã.",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@sinclair/typebox": "^0.34.52"
+  },
+  "devDependencies": {
+    "vitest": "^5.0.1"
+  }
+}
