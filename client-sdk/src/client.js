@@ -129,19 +129,30 @@ export class SecureNoteClient {
     const wrappedEd25519PrivateKey = await sharing.wrapPrivateKey(ed25519.privateKey, masterKey);
 
     const authKeyB64 = toBase64(authKey);
-    await this.transport.register({
-      email: normalizedEmail,
-      salt: toBase64(salt),
-      kdfParams,
-      authKey: authKeyB64,
-      wrappedVaultKey,
-      x25519PublicKey: toBase64(x25519.publicKey),
-      ed25519PublicKey: toBase64(ed25519.publicKey),
-      wrappedX25519PrivateKey,
-      wrappedEd25519PrivateKey,
-    });
+    try {
+      await this.transport.register({
+        email: normalizedEmail,
+        salt: toBase64(salt),
+        kdfParams,
+        authKey: authKeyB64,
+        wrappedVaultKey,
+        x25519PublicKey: toBase64(x25519.publicKey),
+        ed25519PublicKey: toBase64(ed25519.publicKey),
+        wrappedX25519PrivateKey,
+        wrappedEd25519PrivateKey,
+      });
 
-    await this.transport.login({ email: normalizedEmail, authKey: authKeyB64 });
+      await this.transport.login({ email: normalizedEmail, authKey: authKeyB64 });
+    } catch (err) {
+      // Đăng ký thất bại (email đã có, mất mạng...): các khóa vừa sinh không bao giờ được dùng.
+      sodium.memzero(masterKey);
+      sodium.memzero(vaultKey);
+      sodium.memzero(x25519.privateKey);
+      sodium.memzero(ed25519.privateKey);
+      throw err;
+    } finally {
+      sodium.memzero(authKey);
+    }
 
     this._session = {
       email: normalizedEmail,
@@ -178,38 +189,54 @@ export class SecureNoteClient {
       kdfParams,
     );
 
-    const account = await this.transport.login({
-      email: normalizedEmail,
-      authKey: toBase64(authKey),
-    });
-
-    // authKey đã đúng (server chấp nhận) mà vẫn không mở được khóa bọc thì khóa bọc đã bị sửa.
-    const vaultKey = await openOrReject(() =>
-      vault.unwrapVaultKey(account.wrappedVaultKey, masterKey),
-    );
-    const x25519PrivateKey = await openOrReject(() =>
-      sharing.unwrapPrivateKey(account.wrappedX25519PrivateKey, masterKey),
-    );
-    const ed25519PrivateKey = await openOrReject(() =>
-      sharing.unwrapPrivateKey(account.wrappedEd25519PrivateKey, masterKey),
-    );
-
-    // Khóa công khai của chính mình SUY RA từ khóa riêng, không tin bản server gửi. Server gửi bản
-    // khác thì nó đang phát khóa giả cho người khác dùng để chia sẻ với mình — dừng lại ngay.
-    const x25519PublicKey = sodium.crypto_scalarmult_base(x25519PrivateKey);
-    const ed25519PublicKey = sodium.crypto_sign_ed25519_sk_to_pk(ed25519PrivateKey);
-    if (
-      !sodium.memcmp(x25519PublicKey, fromBase64(account.x25519PublicKey)) ||
-      !sodium.memcmp(ed25519PublicKey, fromBase64(account.ed25519PublicKey))
-    ) {
+    let account;
+    try {
+      account = await this.transport.login({
+        email: normalizedEmail,
+        authKey: toBase64(authKey),
+      });
+    } catch (err) {
+      // Sai mật khẩu, bị giới hạn, mất mạng...: masterKey vừa dẫn xuất không dùng tới nữa.
       sodium.memzero(masterKey);
-      sodium.memzero(vaultKey);
-      sodium.memzero(x25519PrivateKey);
-      sodium.memzero(ed25519PrivateKey);
-      throw new ApiError(
-        'INTEGRITY_ERROR',
-        'Khóa công khai máy chủ lưu cho tài khoản này không khớp với khóa riêng của bạn.',
+      throw err;
+    } finally {
+      sodium.memzero(authKey);
+    }
+
+    // Mọi đường thất bại từ đây đều xóa những khóa đã mở được, không để lại trong bộ nhớ.
+    let vaultKey;
+    let x25519PrivateKey;
+    let ed25519PrivateKey;
+    let x25519PublicKey;
+    let ed25519PublicKey;
+    try {
+      // authKey đã đúng (server chấp nhận) mà vẫn không mở được khóa bọc thì khóa bọc đã bị sửa.
+      vaultKey = await openOrReject(() => vault.unwrapVaultKey(account.wrappedVaultKey, masterKey));
+      x25519PrivateKey = await openOrReject(() =>
+        sharing.unwrapPrivateKey(account.wrappedX25519PrivateKey, masterKey),
       );
+      ed25519PrivateKey = await openOrReject(() =>
+        sharing.unwrapPrivateKey(account.wrappedEd25519PrivateKey, masterKey),
+      );
+
+      // Khóa công khai của chính mình SUY RA từ khóa riêng, không tin bản server gửi. Server gửi bản
+      // khác thì nó đang phát khóa giả cho người khác dùng để chia sẻ với mình — dừng lại ngay.
+      x25519PublicKey = sodium.crypto_scalarmult_base(x25519PrivateKey);
+      ed25519PublicKey = sodium.crypto_sign_ed25519_sk_to_pk(ed25519PrivateKey);
+      if (
+        !sodium.memcmp(x25519PublicKey, fromBase64(account.x25519PublicKey)) ||
+        !sodium.memcmp(ed25519PublicKey, fromBase64(account.ed25519PublicKey))
+      ) {
+        throw new ApiError(
+          'INTEGRITY_ERROR',
+          'Khóa công khai máy chủ lưu cho tài khoản này không khớp với khóa riêng của bạn.',
+        );
+      }
+    } catch (err) {
+      for (const key of [masterKey, vaultKey, x25519PrivateKey, ed25519PrivateKey]) {
+        if (key) sodium.memzero(key);
+      }
+      throw err;
     }
 
     this._session = {
@@ -242,14 +269,39 @@ export class SecureNoteClient {
     } catch (err) {
       if (err?.code !== 'UNAUTHENTICATED') throw err;
     } finally {
-      if (this._session) {
-        sodium.memzero(this._session.masterKey);
-        sodium.memzero(this._session.vaultKey);
-        sodium.memzero(this._session.x25519PrivateKey);
-        sodium.memzero(this._session.ed25519PrivateKey);
-      }
-      this._session = null;
+      this._wipeSession();
     }
+  }
+
+  /** Xóa mọi khóa khỏi bộ nhớ rồi quên phiên. */
+  _wipeSession() {
+    if (this._session) {
+      sodium.memzero(this._session.masterKey);
+      sodium.memzero(this._session.vaultKey);
+      sodium.memzero(this._session.x25519PrivateKey);
+      sodium.memzero(this._session.ed25519PrivateKey);
+    }
+    this._session = null;
+  }
+
+  /**
+   * Xóa VĨNH VIỄN tài khoản: mọi note của mình, các lượt chia sẻ gửi đi và nhận về, mọi phiên đăng
+   * nhập và lịch sử đăng nhập. Phải nhập lại mật khẩu (ASVS 7.4.2, D86). Thành công thì khóa bị xóa
+   * khỏi bộ nhớ và dữ liệu "version đã thấy" của tài khoản này bị xóa khỏi trình duyệt.
+   *
+   * @param {string} password mật khẩu hiện tại
+   * @returns {Promise<void>}
+   */
+  async deleteAccount(password) {
+    const { email } = this._requireSession();
+    const authKey = await this._currentAuthKey(password);
+    try {
+      await this.transport.deleteAccount({ authKey: toBase64(authKey) });
+    } finally {
+      sodium.memzero(authKey);
+    }
+    this._versions.forget?.(email);
+    this._wipeSession();
   }
 
   /**
@@ -271,12 +323,7 @@ export class SecureNoteClient {
     assertAcceptablePassword(newPassword);
     await ready();
 
-    const { salt: oldSalt, kdfParams: oldKdfParams } = await this.transport.getSalt(session.email);
-    const { authKey: oldAuthKey } = await kdf.deriveKeysFromPassword(
-      oldPassword,
-      fromBase64(oldSalt),
-      oldKdfParams,
-    );
+    const oldAuthKey = await this._currentAuthKey(oldPassword);
 
     const newSalt = kdf.generateSalt();
     const kdfParams = { ...KDF_DEFAULTS };
@@ -286,23 +333,94 @@ export class SecureNoteClient {
       kdfParams,
     );
 
-    await this.transport.changePassword({
-      oldAuthKey: toBase64(oldAuthKey),
-      salt: toBase64(newSalt),
-      kdfParams,
-      authKey: toBase64(newAuthKey),
-      wrappedVaultKey: await vault.wrapVaultKey(session.vaultKey, newMasterKey),
-      wrappedX25519PrivateKey: await sharing.wrapPrivateKey(session.x25519PrivateKey, newMasterKey),
-      wrappedEd25519PrivateKey: await sharing.wrapPrivateKey(
-        session.ed25519PrivateKey,
-        newMasterKey,
-      ),
-    });
+    try {
+      await this.transport.changePassword({
+        oldAuthKey: toBase64(oldAuthKey),
+        salt: toBase64(newSalt),
+        kdfParams,
+        authKey: toBase64(newAuthKey),
+        wrappedVaultKey: await vault.wrapVaultKey(session.vaultKey, newMasterKey),
+        wrappedX25519PrivateKey: await sharing.wrapPrivateKey(
+          session.x25519PrivateKey,
+          newMasterKey,
+        ),
+        wrappedEd25519PrivateKey: await sharing.wrapPrivateKey(
+          session.ed25519PrivateKey,
+          newMasterKey,
+        ),
+      });
+    } catch (err) {
+      // Đổi thất bại: masterKey mới không bao giờ được dùng, xóa luôn.
+      sodium.memzero(newMasterKey);
+      throw err;
+    } finally {
+      sodium.memzero(oldAuthKey);
+      sodium.memzero(newAuthKey);
+    }
 
     sodium.memzero(session.masterKey);
     session.masterKey = newMasterKey;
 
     return { email: session.email };
+  }
+
+  /**
+   * authKey của mật khẩu HIỆN TẠI, để chứng minh với server là người dùng vừa nhập lại mật khẩu
+   * (đổi mật khẩu, đăng xuất thiết bị khác). masterKey dẫn xuất kèm theo không cần nên xóa ngay.
+   * @param {string} password
+   * @returns {Promise<Uint8Array>}
+   */
+  async _currentAuthKey(password) {
+    await ready();
+    const session = this._requireSession();
+    const { salt, kdfParams } = await this.transport.getSalt(session.email);
+    const { authKey, masterKey } = await kdf.deriveKeysFromPassword(
+      password,
+      fromBase64(salt),
+      kdfParams,
+    );
+    sodium.memzero(masterKey);
+    return authKey;
+  }
+
+  /**
+   * Các thiết bị đang đăng nhập vào tài khoản (phiên còn hạn), thiết bị hiện tại có `current: true`.
+   * @returns {Promise<Array<{id: string, current: boolean, createdAt: string, lastSeenAt: string, expiresAt: string, ip: string | null, userAgent: string | null}>>}
+   */
+  async listSessions() {
+    this._requireSession();
+    return this.transport.listSessions();
+  }
+
+  /**
+   * Đăng xuất từ xa. Có `sessionId`: đúng thiết bị đó; không có: MỌI thiết bị khác, giữ thiết bị
+   * này. Phải nhập lại mật khẩu (ASVS 7.5.2): người mượn máy đang đăng nhập không làm được.
+   *
+   * @param {string} password mật khẩu hiện tại
+   * @param {string} [sessionId] id lấy từ listSessions()
+   * @returns {Promise<{revoked: number}>} số phiên đã bị hủy
+   */
+  async revokeSessions(password, sessionId) {
+    const authKey = await this._currentAuthKey(password);
+    try {
+      return await this.transport.revokeSessions({
+        authKey: toBase64(authKey),
+        ...(sessionId === undefined ? {} : { sessionId }),
+      });
+    } finally {
+      sodium.memzero(authKey);
+    }
+  }
+
+  /**
+   * Các lần đăng nhập vào tài khoản này, mới nhất trước, CẢ lần thất bại — để người dùng nhận ra
+   * có ai đang đoán mật khẩu của mình.
+   * `kind`: 'login' (đăng nhập), 'change_password' hoặc 'revoke_sessions' (nhập lại mật khẩu).
+   * @returns {Promise<Array<{id: string, success: boolean, kind: string, createdAt: string, ip: string | null, userAgent: string | null}>>}
+   */
+  async loginHistory() {
+    this._requireSession();
+    return this.transport.getLoginHistory();
   }
 
   /**

@@ -19,14 +19,18 @@ schema trong `shared/src/schemas.js` trong cùng một PR.
 
 ## Tài khoản
 
-| Method | Đường dẫn                | Cần đăng nhập | Ghi chú                                                                    |
-| ------ | ------------------------ | ------------- | -------------------------------------------------------------------------- |
-| POST   | `/api/register`          | Không         | **RegisterRequest** → `201` body rỗng; có rate limit                       |
-| GET    | `/api/users/:email/salt` | Không         | **SaltResponse**; email chưa đăng ký vẫn trả salt giả (D15); có rate limit |
-| POST   | `/api/login`             | Không         | **LoginRequest** → cookie + **SelfAccountResponse**; có rate limit         |
-| POST   | `/api/logout`            | Có            | Xóa phiên hiện tại; `204`                                                  |
-| GET    | `/api/me`                | Có            | **SelfAccountResponse** (giống body của login)                             |
-| POST   | `/api/change-password`   | Có            | **ChangePasswordRequest** → `204`; server hủy các phiên khác (D25)         |
+| Method | Đường dẫn              | Cần đăng nhập | Ghi chú                                                              |
+| ------ | ---------------------- | ------------- | -------------------------------------------------------------------- |
+| POST   | `/api/register`        | Không         | **RegisterRequest** → `201` body rỗng; có rate limit                 |
+| POST   | `/api/users/salt`      | Không         | **EmailRequest** → **SaltResponse**; salt giả nếu chưa đăng ký (D15) |
+| POST   | `/api/login`           | Không         | **LoginRequest** → cookie + **SelfAccountResponse**; có rate limit   |
+| POST   | `/api/logout`          | Có            | Xóa phiên hiện tại; `204`                                            |
+| GET    | `/api/me`              | Có            | **SelfAccountResponse** (giống body của login)                       |
+| POST   | `/api/change-password` | Có            | **ChangePasswordRequest** → `204`; server hủy các phiên khác (D25)   |
+| POST   | `/api/account/delete`  | Có            | **DeleteAccountRequest** → `204`; xóa vĩnh viễn tài khoản (D86)      |
+
+Email không bao giờ nằm trên đường dẫn hay query string: URL hay bị ghi lại ở nhiều nơi (log proxy,
+lịch sử trình duyệt), nên tra salt và khóa công khai gửi email trong body (ASVS 14.2.1, D85).
 
 ### POST /api/register
 
@@ -81,11 +85,18 @@ người này bị hủy trong cùng một transaction (D25, D52).
 > Lưu ý cho giao diện: `INVALID_CREDENTIALS` ở route này là `401` **dù người dùng vẫn đang đăng nhập**.
 > Đừng coi mọi `401` là "hết phiên"; hãy xem `code`: chỉ `UNAUTHENTICATED` mới nghĩa là phải đăng nhập lại.
 
-### GET /api/users/:email/salt
+### POST /api/users/salt
 
-Không cần đăng nhập. Trả `{ salt, kdfParams }` để client dẫn xuất khóa bằng đúng tham số Argon2id đã
+Body `{ "email": "…" }`. Không cần đăng nhập. Trả `{ salt, kdfParams }` để client dẫn xuất khóa bằng đúng tham số Argon2id đã
 dùng lúc đăng ký (D13). Email chưa đăng ký vẫn trả `200` với salt giả, cố định theo email và trông y
 hệt salt thật (D15), nên không dò được ai đã có tài khoản.
+
+### POST /api/account/delete
+
+Body `{ "authKey": "…" }`: phải nhập lại mật khẩu (ASVS 7.4.2, như D25). Xóa vĩnh viễn tài khoản cùng
+mọi phiên, note (kèm các lượt chia sẻ của note), lượt chia sẻ gửi đi và nhận về, và toàn bộ lịch sử đăng
+nhập của email đó. Thành công `204` và xóa cookie. Sai mật khẩu `401 INVALID_CREDENTIALS` (lần thử được
+ghi với `kind: "delete_account"`). Chịu rate limit theo IP và giới hạn theo tài khoản (D81).
 
 ### POST /api/login
 
@@ -100,6 +111,10 @@ Schema: `LoginRequest` → `SelfAccountResponse`.
 - Sai `authKey` **và** email không tồn tại đều trả `401 INVALID_CREDENTIALS` với cùng thông điệp.
 - Đăng nhập luôn cấp token mới; nếu request mang theo cookie phiên cũ thì phiên đó bị hủy (D44).
 - Mọi lần thử, cả thất bại, được ghi vào `LoginHistory`.
+- Ngoài giới hạn theo IP còn có giới hạn **theo email** (D81): sau `ACCOUNT_THROTTLE.FREE_FAILURES` lần
+  nhập sai mật khẩu kể từ lần đúng gần nhất, mọi lần thử (kể cả đúng mật khẩu) trả `429 RATE_LIMITED`
+  kèm header `Retry-After` cho tới hết thời gian chờ (1, 2, 4… tối đa 15 phút). Email chưa đăng ký bị
+  giới hạn y hệt. Lần thử trong lúc bị chặn không được kiểm tra và không được ghi.
 - Phiên hết hạn tuyệt đối sau 24 giờ, không tự gia hạn (D43).
 
 ### POST /api/logout và GET /api/me
@@ -112,13 +127,15 @@ xóa cookie. `me` trả `SelfAccountResponse`, giống body của login.
 Tính theo IP (`RATE_LIMITS` trong `shared/src/config.js`); vượt ngưỡng trả `429 RATE_LIMITED`. Chưa có
 giới hạn theo từng tài khoản.
 
-| Route                        | Ngưỡng           |
-| ---------------------------- | ---------------- |
-| `POST /api/register`         | 5 lần / 15 phút  |
-| `POST /api/login`            | 10 lần / 15 phút |
-| `GET /api/users/:email/salt` | 30 lần / 15 phút |
-| `POST /api/change-password`  | 5 lần / 15 phút  |
-| `GET /api/users/:email/keys` | 60 lần / 15 phút |
+| Route                       | Ngưỡng           |
+| --------------------------- | ---------------- |
+| `POST /api/register`        | 5 lần / 15 phút  |
+| `POST /api/login`           | 10 lần / 15 phút |
+| `POST /api/users/salt`      | 30 lần / 15 phút |
+| `POST /api/change-password` | 5 lần / 15 phút  |
+| `POST /api/users/keys`      | 60 lần / 15 phút |
+| `POST /api/sessions/revoke` | 5 lần / 15 phút  |
+| `POST /api/account/delete`  | 5 lần / 15 phút  |
 
 Server sau reverse proxy phải đặt `TRUST_PROXY=true` (D46), nếu không mọi request có cùng IP.
 
@@ -201,13 +218,13 @@ mới bằng Vault Key, rồi gửi kèm một gói chia sẻ mới cho **mỗi*
 Mọi route đều cần đăng nhập — kể cả tra khóa công khai, để người lạ không dùng nó dò xem email nào
 đã có tài khoản.
 
-| Method | Đường dẫn                | Ghi chú                                                                    |
-| ------ | ------------------------ | -------------------------------------------------------------------------- |
-| GET    | `/api/users/:email/keys` | **UserKeysResponse**; email không tồn tại trả `404 NOT_FOUND`              |
-| POST   | `/api/notes/:id/shares`  | **ShareCreateRequest** → **ShareCreatedResponse**; chỉ chủ note            |
-| GET    | `/api/notes/:id/shares`  | **NoteShareListResponse**: note của mình đang chia sẻ cho ai; chỉ chủ note |
-| GET    | `/api/shares`            | **ShareListResponse**: gói chia sẻ gửi cho mình (người nhận lấy từ phiên)  |
-| DELETE | `/api/shares/:id`        | Chỉ người gửi; `204`                                                       |
+| Method | Đường dẫn               | Ghi chú                                                                    |
+| ------ | ----------------------- | -------------------------------------------------------------------------- |
+| POST   | `/api/users/keys`       | **EmailRequest** → **UserKeysResponse**; không tồn tại trả `404`           |
+| POST   | `/api/notes/:id/shares` | **ShareCreateRequest** → **ShareCreatedResponse**; chỉ chủ note            |
+| GET    | `/api/notes/:id/shares` | **NoteShareListResponse**: note của mình đang chia sẻ cho ai; chỉ chủ note |
+| GET    | `/api/shares`           | **ShareListResponse**: gói chia sẻ gửi cho mình (người nhận lấy từ phiên)  |
+| DELETE | `/api/shares/:id`       | Chỉ người gửi; `204`                                                       |
 
 `sharePackage` = `{ ephemeralPublicKey, nonce, ciphertext, signature }`, chữ ký bao gồm noteId.
 
@@ -219,7 +236,7 @@ Người nhận đọc nội dung qua `GET /api/notes/:noteId`, **không** có r
 
 - `POST /api/notes/:id/shares` trả `201` cả khi tạo mới lẫn khi thay gói cũ. Người nhận phải là tài khoản
   đã tồn tại, nếu không `404` — nghĩa là người đã đăng nhập dò được một email có tài khoản hay không;
-  giảm nhẹ bằng rate limit của `/users/:email/keys`.
+  giảm nhẹ bằng rate limit của `/users/keys`.
 - `DELETE /api/shares/:id` chỉ chặn lần đọc **sau** qua API. Nó **không** thu hồi được khóa mà người nhận
   đã giải mã và có thể đã giữ lại; muốn thu hồi thật sự phải xoay khóa note (`rotate`, D24, D53).
 - `GET /api/notes/:id/shares` chỉ trả `{ id, recipientEmail, createdAt }`, không trả gói chia sẻ. Cần để
@@ -246,11 +263,42 @@ UTF-8**, không phải số ký tự.
 
 ## Phiên đăng nhập
 
-| Method | Đường dẫn            | Ghi chú                           |
-| ------ | -------------------- | --------------------------------- |
-| GET    | `/api/sessions`      | Các phiên đang hoạt động của mình |
-| DELETE | `/api/sessions/:id`  | Đăng xuất một thiết bị            |
-| GET    | `/api/login-history` | Lịch sử đăng nhập, cả thất bại    |
+Mọi route đều cần đăng nhập và chỉ đụng tới phiên, lịch sử của **chính mình** (người dùng lấy từ phiên,
+D16).
+
+| Method | Đường dẫn              | Ghi chú                                                                    |
+| ------ | ---------------------- | -------------------------------------------------------------------------- |
+| GET    | `/api/sessions`        | **SessionListResponse**: các phiên CHƯA hết hạn, mới hoạt động nhất trước  |
+| POST   | `/api/sessions/revoke` | **RevokeSessionsRequest** → **RevokeSessionsResponse**; có rate limit      |
+| GET    | `/api/login-history`   | **LoginHistoryResponse**: tối đa `LIMITS.LOGIN_HISTORY_LIMIT` lần gần nhất |
+
+### GET /api/sessions
+
+Mỗi phiên: `id`, `current` (phiên đang gửi request này), `createdAt`, `lastSeenAt`, `expiresAt`, `ip`,
+`userAgent` (hai trường cuối có thể `null`). `id` là SHA-256 (hex) của token trong cookie, **không** phải
+token: biết `id` không đăng nhập được (D80).
+
+### POST /api/sessions/revoke
+
+```json
+{ "authKey": "…", "sessionId": "64 ký tự hex, tùy chọn" }
+```
+
+- Có `sessionId`: đăng xuất đúng phiên đó. Không có: đăng xuất **mọi phiên khác**, giữ phiên hiện tại.
+- `authKey` bắt buộc (ASVS 7.5.2): phải nhập lại mật khẩu, cookie phiên thôi là chưa đủ. Sai thì
+  `401 INVALID_CREDENTIALS` và không phiên nào bị hủy.
+- `sessionId` của người khác hoặc không tồn tại: `404 NOT_FOUND`, hai trường hợp như nhau.
+- `sessionId` là phiên hiện tại: `400 VALIDATION_ERROR`; dùng `POST /api/logout`.
+- Thành công: `200 { "revoked": <số phiên đã hủy> }`.
+- Rate limit `RATE_LIMITS.REVOKE_SESSIONS` (5 lần / 15 phút), cộng giới hạn theo tài khoản chung với
+  đăng nhập (D81). Mỗi lần nhập lại mật khẩu được ghi vào lịch sử với `kind: "revoke_sessions"`. Một route cho cả hai kiểu để mọi lần thử
+  mật khẩu dùng chung một ngưỡng.
+
+### GET /api/login-history
+
+Mỗi dòng: `id`, `success`, `kind`, `createdAt`, `ip`, `userAgent`. `kind` là `login`, hoặc
+`change_password` / `revoke_sessions` / `delete_account` cho các lần nhập lại mật khẩu. Gồm cả lần **sai mật khẩu** vào
+tài khoản mình, mới nhất trước. Lần thử với email chưa đăng ký không thuộc về ai nên không hiện cho ai.
 
 ## Tiện ích
 

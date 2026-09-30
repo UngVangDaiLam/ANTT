@@ -70,6 +70,14 @@ export default function App() {
             key={email}
             email={email}
             onSignOut={(message) => endSession(email, message)}
+            onAccountDeleted={() => {
+              // SDK đã xóa khóa và phiên; chỉ còn đưa về màn hình đăng nhập.
+              setEmail(null);
+              setNotice({
+                tone: 'info',
+                text: 'Tài khoản và toàn bộ ghi chú của bạn đã được xóa vĩnh viễn.',
+              });
+            }}
           />
         </>
       ) : (

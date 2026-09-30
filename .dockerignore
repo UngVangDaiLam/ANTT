@@ -1,0 +1,16 @@
+# Build context là cả repo (monorepo). Chỉ gửi mã nguồn vào Docker, không gửi bí mật hay thứ đã build.
+**/node_modules
+**/dist
+**/coverage
+**/.env
+**/.env.*
+!**/.env.example
+**/*.log
+**/*.db
+.git
+.github
+.claude
+.vscode
+benchmark
+docs
+**/test

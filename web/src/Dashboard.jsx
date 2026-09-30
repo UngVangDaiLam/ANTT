@@ -7,12 +7,13 @@ import { Icon } from './components/Icon.jsx';
 import { ConfirmDialog, Modal } from './components/Modal.jsx';
 import { NoteEditor } from './NoteEditor.jsx';
 import { ChangePasswordDialog } from './ChangePasswordDialog.jsx';
+import { SessionsDialog } from './SessionsDialog.jsx';
 
 /**
  * Khung làm việc sau khi đăng nhập: thanh bên (tạo, tìm, danh sách ghi chú, tài khoản) và vùng
  * soạn thảo. Trên màn hình hẹp, thanh bên thu thành ngăn kéo mở bằng nút menu.
  */
-export function Dashboard({ email, onSignOut }) {
+export function Dashboard({ email, onSignOut, onAccountDeleted }) {
   const toast = useToast();
   const [notes, setNotes] = useState([]);
   const [shared, setShared] = useState([]);
@@ -22,7 +23,7 @@ export function Dashboard({ email, onSignOut }) {
   const [query, setQuery] = useState('');
   const [dirty, setDirty] = useState(false);
   const [pendingAction, setPendingAction] = useState(null);
-  const [dialog, setDialog] = useState(null); // 'password' | 'fingerprint'
+  const [dialog, setDialog] = useState(null); // 'password' | 'fingerprint' | 'sessions'
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [creating, setCreating] = useState(false);
 
@@ -222,6 +223,15 @@ export function Dashboard({ email, onSignOut }) {
           <button
             type="button"
             className="icon-btn"
+            onClick={() => setDialog('sessions')}
+            aria-label="Tài khoản và bảo mật"
+            title="Tài khoản và bảo mật"
+          >
+            <Icon name="device" />
+          </button>
+          <button
+            type="button"
+            className="icon-btn"
             onClick={() => setDialog('password')}
             aria-label="Đổi mật khẩu"
             title="Đổi mật khẩu"
@@ -315,6 +325,16 @@ export function Dashboard({ email, onSignOut }) {
       )}
 
       {dialog === 'fingerprint' && <MyFingerprintDialog onClose={() => setDialog(null)} />}
+
+      {dialog === 'sessions' && (
+        <SessionsDialog
+          email={email}
+          onAccountDeleted={onAccountDeleted}
+          onClose={() => setDialog(null)}
+          onError={handleError}
+          onChangePassword={() => setDialog('password')}
+        />
+      )}
 
       {pendingAction && (
         <ConfirmDialog

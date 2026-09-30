@@ -19,7 +19,7 @@ describe.each(backends)('POST /api/change-password [$name]', (backend) => {
 
   const change = (user, body, extra) => user.req('POST', '/api/change-password', body, extra);
   const salt = (email) =>
-    h.send('GET', `/api/users/${encodeURIComponent(email)}/salt`).then((r) => r.json());
+    h.send('POST', '/api/users/salt', { payload: { email } }).then((r) => r.json());
 
   test('đổi thành công trả 204; đăng nhập bằng authKey mới được, authKey cũ hết dùng', async () => {
     const body = changePasswordBody(alice.authKey);
@@ -235,14 +235,9 @@ describe.each(backends)('POST /api/change-password [$name]', (backend) => {
 
     expect(res.statusCode).toBe(429);
     expect(res.json().code).toBe('RATE_LIMITED');
-    // Mật khẩu cũ vẫn nguyên vì yêu cầu đúng bị chặn trước khi chạy.
-    expect(
-      (
-        await h.send('POST', '/api/login', {
-          payload: { email: alice.email, authKey: alice.authKey },
-        })
-      ).statusCode,
-    ).toBe(200);
+    // Mật khẩu cũ vẫn nguyên vì yêu cầu đúng bị chặn trước khi chạy. (Không thử đăng nhập để kiểm:
+    // 5 lần sai mật khẩu cũ ở trên đã làm tài khoản phải chờ theo D81, đúng như thiết kế.)
+    expect((await salt(alice.email)).salt).toBe(alice.body.salt);
   });
 
   test('từ chối request từ Origin lạ (CSRF) và không đổi gì', async () => {

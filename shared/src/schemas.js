@@ -8,7 +8,14 @@
  * Quy ước: mọi Object đều additionalProperties: false.
  */
 import { Type } from '@sinclair/typebox';
-import { CRYPTO_SIZES, KDF_MAXIMUMS, KDF_MINIMUMS, LIMITS, NOTE_VERSION_START } from './config.js';
+import {
+  AUTH_ATTEMPT_KINDS,
+  CRYPTO_SIZES,
+  KDF_MAXIMUMS,
+  KDF_MINIMUMS,
+  LIMITS,
+  NOTE_VERSION_START,
+} from './config.js';
 
 const strict = { additionalProperties: false };
 
@@ -154,10 +161,13 @@ export const ErrorBody = Type.Object({ code: Type.String(), message: Type.String
 // Tài khoản
 // ---------------------------------------------------------------------------
 
-/** Tham số đường dẫn của GET /api/users/:email/salt và /keys. */
-export const EmailParams = Type.Object({ email: Email }, strict);
+/**
+ * Body của POST /api/users/salt và /keys. Email nằm trong body chứ không trên đường dẫn: URL hay bị
+ * ghi lại ở nhiều nơi (log proxy, lịch sử trình duyệt), body thì không (ASVS 14.2.1, D85).
+ */
+export const EmailRequest = Type.Object({ email: Email }, strict);
 
-/** GET /api/users/:email/salt. Email chưa đăng ký vẫn trả salt giả (D15). */
+/** POST /api/users/salt. Email chưa đăng ký vẫn trả salt giả (D15). */
 export const SaltResponse = Type.Object(
   { salt: Base64UrlBytes(CRYPTO_SIZES.SALT_BYTES), kdfParams: KdfParams },
   strict,
@@ -185,7 +195,7 @@ export const SelfAccountResponse = Type.Object(
   strict,
 );
 
-/** GET /api/users/:email/keys: khóa công khai của người khác, để chia sẻ note. */
+/** POST /api/users/keys: khóa công khai của người khác, để chia sẻ note. */
 export const UserKeysResponse = Type.Object(
   {
     x25519PublicKey: Base64UrlBytes(CRYPTO_SIZES.PUBLIC_KEY_BYTES),
@@ -339,3 +349,80 @@ export const NoteShareListItem = Type.Object(
 );
 
 export const NoteShareListResponse = Type.Array(NoteShareListItem);
+
+// ---------------------------------------------------------------- phiên đăng nhập
+
+/**
+ * Id của một phiên = SHA-256 (hex) của token trong cookie. Lộ id không cho đăng nhập được: server
+ * chỉ nhận token gốc 256 bit, và không ai tính ngược được token từ hash (D80).
+ */
+export const SessionId = Type.String({ pattern: '^[0-9a-f]{64}$' });
+
+const ClientIp = Type.Union([Type.String({ maxLength: LIMITS.MAX_IP_LENGTH }), Type.Null()]);
+const ClientUserAgent = Type.Union([
+  Type.String({ maxLength: LIMITS.MAX_USER_AGENT_LENGTH }),
+  Type.Null(),
+]);
+
+/** Một dòng trong GET /api/sessions: phiên CHƯA hết hạn của chính mình. */
+export const SessionListItem = Type.Object(
+  {
+    id: SessionId,
+    /** Phiên đang gửi request này (thiết bị hiện tại). */
+    current: Type.Boolean(),
+    createdAt: IsoDateTime,
+    lastSeenAt: IsoDateTime,
+    expiresAt: IsoDateTime,
+    ip: ClientIp,
+    userAgent: ClientUserAgent,
+  },
+  strict,
+);
+
+export const SessionListResponse = Type.Array(SessionListItem);
+
+/**
+ * POST /api/sessions/revoke. Có `sessionId`: đăng xuất đúng thiết bị đó. Không có: đăng xuất MỌI
+ * thiết bị khác, giữ phiên hiện tại. `authKey` bắt buộc: phải nhập lại mật khẩu (ASVS 7.5.2).
+ */
+export const RevokeSessionsRequest = Type.Object(
+  {
+    authKey: Base64UrlBytes(CRYPTO_SIZES.AUTH_KEY_BYTES),
+    sessionId: Type.Optional(SessionId),
+  },
+  strict,
+);
+
+export const RevokeSessionsResponse = Type.Object(
+  { revoked: Type.Integer({ minimum: 0 }) },
+  strict,
+);
+
+/**
+ * Một dòng trong GET /api/login-history: một lần nhập mật khẩu VÀO tài khoản của mình, cả thất bại —
+ * đăng nhập, hoặc nhập lại mật khẩu để đổi mật khẩu / đăng xuất thiết bị khác (`kind`).
+ */
+export const LoginHistoryItem = Type.Object(
+  {
+    id: Uuid,
+    success: Type.Boolean(),
+    kind: Type.Union(Object.values(AUTH_ATTEMPT_KINDS).map((kind) => Type.Literal(kind))),
+    createdAt: IsoDateTime,
+    ip: ClientIp,
+    userAgent: ClientUserAgent,
+  },
+  strict,
+);
+
+export const LoginHistoryResponse = Type.Array(LoginHistoryItem, {
+  maxItems: LIMITS.LOGIN_HISTORY_LIMIT,
+});
+
+/**
+ * POST /api/account/delete (ASVS 7.4.2, D86). Phải nhập lại mật khẩu: người mượn máy đang đăng nhập
+ * không xóa được tài khoản của chủ máy.
+ */
+export const DeleteAccountRequest = Type.Object(
+  { authKey: Base64UrlBytes(CRYPTO_SIZES.AUTH_KEY_BYTES) },
+  strict,
+);

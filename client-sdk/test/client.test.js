@@ -1,9 +1,10 @@
-import { beforeEach, describe, test, expect } from 'vitest';
-import { fromBase64, note as noteCrypto, sharing } from '@secure-notes/crypto';
+import { beforeEach, describe, test, expect, vi } from 'vitest';
+import { fromBase64, getSodium, note as noteCrypto, sharing } from '@secure-notes/crypto';
 import { KDF_DEFAULTS, LIMITS } from '@secure-notes/shared';
 import { SecureNoteClient } from '../src/client.js';
 import { createMemoryServer, createMemoryTransport } from '../src/memoryTransport.js';
 import { ApiError } from '../src/apiError.js';
+import { createLocalStorageVersionStore } from '../src/versionStore.js';
 
 /** Một người dùng = một trình duyệt = một kết nối riêng tới server giả. */
 function newClient(server) {
@@ -663,5 +664,234 @@ describe('chính sách mật khẩu khi đăng ký và đổi mật khẩu', () 
     await expect(
       newClient(server).login('alice@example.com', 'mat khau co dau cach'),
     ).rejects.toMatchObject({ code: 'INVALID_CREDENTIALS' });
+  });
+});
+
+describe('quản lý phiên đăng nhập', () => {
+  const PW = 'mk-alice-du-dai';
+  let server;
+  let laptop;
+  let phone;
+
+  beforeEach(async () => {
+    server = createMemoryServer();
+    laptop = new SecureNoteClient(server.connect());
+    await laptop.register('alice@example.com', PW);
+    phone = new SecureNoteClient(server.connect());
+    await phone.login('alice@example.com', PW);
+  });
+
+  test('listSessions: thấy cả hai thiết bị, đánh dấu đúng thiết bị hiện tại', async () => {
+    const sessions = await laptop.listSessions();
+
+    expect(sessions).toHaveLength(2);
+    expect(sessions.filter((s) => s.current)).toHaveLength(1);
+    const seenFromPhone = await phone.listSessions();
+    const laptopId = sessions.find((s) => s.current).id;
+    expect(seenFromPhone.find((s) => s.current).id).not.toBe(laptopId);
+  });
+
+  test('đăng xuất đúng thiết bị kia: thiết bị kia mất phiên, thiết bị này vẫn dùng được', async () => {
+    const other = (await laptop.listSessions()).find((s) => !s.current);
+
+    expect(await laptop.revokeSessions(PW, other.id)).toEqual({ revoked: 1 });
+
+    await expect(phone.listNotes()).rejects.toMatchObject({ code: 'UNAUTHENTICATED' });
+    await expect(laptop.listNotes()).resolves.toEqual([]);
+  });
+
+  test('không truyền sessionId: đăng xuất mọi thiết bị khác', async () => {
+    const tablet = new SecureNoteClient(server.connect());
+    await tablet.login('alice@example.com', PW);
+
+    expect(await laptop.revokeSessions(PW)).toEqual({ revoked: 2 });
+
+    expect(await laptop.listSessions()).toHaveLength(1);
+    await expect(tablet.listSessions()).rejects.toMatchObject({ code: 'UNAUTHENTICATED' });
+  });
+
+  test('sai mật khẩu: INVALID_CREDENTIALS, không thiết bị nào bị đăng xuất', async () => {
+    await expect(laptop.revokeSessions('mat-khau-sai-roi')).rejects.toMatchObject({
+      code: 'INVALID_CREDENTIALS',
+    });
+    await expect(phone.listNotes()).resolves.toEqual([]);
+  });
+
+  test('không đăng xuất chính mình qua đây', async () => {
+    const mine = (await laptop.listSessions()).find((s) => s.current);
+    await expect(laptop.revokeSessions(PW, mine.id)).rejects.toMatchObject({
+      code: 'VALIDATION_ERROR',
+    });
+  });
+
+  test('loginHistory: có cả lần sai mật khẩu, mới nhất trước', async () => {
+    const guesser = new SecureNoteClient(server.connect());
+    await expect(guesser.login('alice@example.com', 'doan-bua-thoi')).rejects.toThrow();
+
+    const history = await laptop.loginHistory();
+
+    expect(history.map((e) => e.success)).toEqual([false, true, true]);
+    expect(new Set(history.map((e) => e.kind))).toEqual(new Set(['login']));
+  });
+
+  test('loginHistory ghi cả lần nhập lại mật khẩu, đúng lẫn sai, với loại tương ứng', async () => {
+    await expect(laptop.revokeSessions('mat-khau-sai-roi')).rejects.toThrow();
+    await laptop.changePassword(PW, 'mat-khau-moi-du-dai');
+
+    const [latest, previous] = await laptop.loginHistory();
+
+    expect(latest).toMatchObject({ kind: 'change_password', success: true });
+    expect(previous).toMatchObject({ kind: 'revoke_sessions', success: false });
+  });
+
+  test('đổi mật khẩu cũng đăng xuất các thiết bị khác (D25)', async () => {
+    await laptop.changePassword(PW, 'mat-khau-moi-du-dai');
+    await expect(phone.listNotes()).rejects.toMatchObject({ code: 'UNAUTHENTICATED' });
+    expect(await laptop.listSessions()).toHaveLength(1);
+  });
+
+  test('chưa đăng nhập thì báo lỗi ngay, không gọi mạng', async () => {
+    const guest = new SecureNoteClient(server.connect());
+    await expect(guest.listSessions()).rejects.toThrow('Chưa đăng nhập');
+    await expect(guest.revokeSessions(PW)).rejects.toThrow('Chưa đăng nhập');
+    await expect(guest.loginHistory()).rejects.toThrow('Chưa đăng nhập');
+  });
+});
+
+describe('xóa tài khoản', () => {
+  const PW = 'mk-alice-du-dai';
+  let server;
+  let alice;
+  let bob;
+
+  beforeEach(async () => {
+    server = createMemoryServer();
+    alice = new SecureNoteClient(server.connect());
+    await alice.register('alice@example.com', PW);
+    bob = new SecureNoteClient(server.connect());
+    await bob.register('bob@example.com', 'mk-bob-du-dai');
+  });
+
+  test('thành công: đăng xuất, khóa bị xóa, thiết bị khác mất phiên, không đăng nhập lại được', async () => {
+    const phone = new SecureNoteClient(server.connect());
+    await phone.login('alice@example.com', PW);
+
+    await alice.deleteAccount(PW);
+
+    expect(alice.isLoggedIn()).toBe(false);
+    await expect(phone.listNotes()).rejects.toMatchObject({ code: 'UNAUTHENTICATED' });
+    const again = new SecureNoteClient(server.connect());
+    await expect(again.login('alice@example.com', PW)).rejects.toMatchObject({
+      code: 'INVALID_CREDENTIALS',
+    });
+  });
+
+  test('note Alice chia sẻ cho Bob biến mất khỏi hộp thư của Bob', async () => {
+    const { id } = await alice.createNote({ title: 'Cho Bob', content: 'x' });
+    await alice.shareNote(id, 'bob@example.com');
+
+    await alice.deleteAccount(PW);
+
+    expect(await bob.listSharedWithMe()).toEqual([]);
+    await expect(bob.readNote(id)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+
+  test('sai mật khẩu: INVALID_CREDENTIALS, vẫn đăng nhập, dữ liệu còn nguyên', async () => {
+    await alice.createNote({ title: 'T', content: 'C' });
+
+    await expect(alice.deleteAccount('mat-khau-sai-roi')).rejects.toMatchObject({
+      code: 'INVALID_CREDENTIALS',
+    });
+
+    expect(alice.isLoggedIn()).toBe(true);
+    expect(await alice.listNotes()).toHaveLength(1);
+  });
+
+  test('xóa "version đã thấy" của tài khoản khỏi trình duyệt, không đụng người dùng khác', async () => {
+    const data = new Map();
+    const storage = { getItem: (k) => data.get(k) ?? null, setItem: (k, v) => data.set(k, v) };
+    // Một kho cho cả trang, như web/src/client.js; hai người lần lượt dùng chung trình duyệt.
+    const versionStore = createLocalStorageVersionStore(storage);
+    const aliceHere = new SecureNoteClient(server.connect(), { versionStore });
+    await aliceHere.login('alice@example.com', PW);
+    await aliceHere.createNote({ title: 'A', content: 'a' });
+    const bobHere = new SecureNoteClient(server.connect(), { versionStore });
+    await bobHere.login('bob@example.com', 'mk-bob-du-dai');
+    await bobHere.createNote({ title: 'B', content: 'b' });
+
+    await aliceHere.deleteAccount(PW);
+
+    const saved = JSON.stringify(Object.keys(JSON.parse([...data.values()].at(-1))));
+    expect(saved).not.toContain('alice@example.com');
+    expect(saved).toContain('bob@example.com');
+  });
+
+  test('chưa đăng nhập thì báo lỗi ngay', async () => {
+    const guest = new SecureNoteClient(server.connect());
+    await expect(guest.deleteAccount(PW)).rejects.toThrow('Chưa đăng nhập');
+  });
+});
+
+describe('vệ sinh bộ nhớ khi đăng ký thất bại', () => {
+  test('email đã có: mọi khóa riêng vừa sinh bị xóa về 0, không nằm lại trong bộ nhớ', async () => {
+    const server = createMemoryServer();
+    await new SecureNoteClient(server.connect()).register('alice@example.com', 'mk-alice-du-dai');
+    const sodium = await getSodium();
+    const boxSpy = vi.spyOn(sodium, 'crypto_box_keypair');
+    const signSpy = vi.spyOn(sodium, 'crypto_sign_keypair');
+
+    const again = new SecureNoteClient(server.connect());
+    await expect(again.register('alice@example.com', 'mk-khac-du-dai')).rejects.toMatchObject({
+      code: 'EMAIL_TAKEN',
+    });
+
+    const keys = [boxSpy, signSpy].map((spy) => spy.mock.results[0].value.privateKey);
+    boxSpy.mockRestore();
+    signSpy.mockRestore();
+    for (const key of keys) expect(key.every((b) => b === 0)).toBe(true);
+    expect(again.isLoggedIn()).toBe(false);
+  });
+});
+
+describe('vệ sinh bộ nhớ khi đăng nhập', () => {
+  /** Ghi lại mọi khóa 32 byte do crypto_kdf sinh ra (authKey, masterKey) trong lúc chạy `fn`. */
+  async function captureDerivedKeys(fn) {
+    const sodium = await getSodium();
+    const spy = vi.spyOn(sodium, 'crypto_kdf_derive_from_key');
+    try {
+      await fn();
+    } catch {
+      // Một số trường hợp cố tình thất bại.
+    }
+    const keys = spy.mock.results.map((r) => r.value);
+    spy.mockRestore();
+    return keys;
+  }
+
+  test('sai mật khẩu: authKey và masterKey vừa dẫn xuất đều bị xóa về 0', async () => {
+    const server = createMemoryServer();
+    await new SecureNoteClient(server.connect()).register('alice@example.com', 'mk-alice-du-dai');
+
+    const keys = await captureDerivedKeys(() =>
+      new SecureNoteClient(server.connect()).login('alice@example.com', 'mat-khau-sai-roi'),
+    );
+
+    expect(keys).toHaveLength(2);
+    for (const key of keys) expect(key.every((b) => b === 0)).toBe(true);
+  });
+
+  test('đăng nhập đúng: authKey bị xóa ngay, masterKey giữ lại cho phiên làm việc', async () => {
+    const server = createMemoryServer();
+    await new SecureNoteClient(server.connect()).register('alice@example.com', 'mk-alice-du-dai');
+    const client = new SecureNoteClient(server.connect());
+
+    const [authKey, masterKey] = await captureDerivedKeys(() =>
+      client.login('alice@example.com', 'mk-alice-du-dai'),
+    );
+
+    expect(authKey.every((b) => b === 0)).toBe(true);
+    expect(masterKey.some((b) => b !== 0)).toBe(true);
+    await client.logout();
+    expect(masterKey.every((b) => b === 0)).toBe(true);
   });
 });

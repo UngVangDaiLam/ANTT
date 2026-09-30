@@ -57,11 +57,12 @@ beforeEach(async () => {
 
 afterEach(() => app.close());
 
-describe('GET /api/users/:email/salt', () => {
+describe('POST /api/users/salt', () => {
   const salt = (email, remoteAddress = nextIp()) =>
     app.inject({
-      method: 'GET',
-      url: `/api/users/${encodeURIComponent(email)}/salt`,
+      method: 'POST',
+      url: '/api/users/salt',
+      payload: { email },
       remoteAddress,
     });
 

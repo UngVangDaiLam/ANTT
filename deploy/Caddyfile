@@ -1,27 +1,45 @@
-# Dùng khi deploy (tuần 7). Giao diện và API cùng một domain:
-#   /api/*  -> Fastify
+# Giao diện và API cùng một origin:
+#   /api/*  -> Fastify (container server)
 #   còn lại -> file tĩnh đã build của web/
-# Thay :8080 bằng tên miền thật để Caddy tự cấp HTTPS.
+#
+# SITE_ADDRESS (deploy/.env):
+#   localhost        -> Caddy tự tạo chứng chỉ bằng CA nội bộ (trình duyệt cảnh báo; dùng để demo)
+#   notes.example.vn -> Caddy tự xin chứng chỉ Let's Encrypt (cần DNS trỏ về máy và mở cổng 80, 443)
+# HTTP luôn được chuyển hướng sang HTTPS.
 
-:8080 {
+{$SITE_ADDRESS:localhost} {
+	encode zstd gzip
+
 	handle /api/* {
+		# Caddy ghi đè X-Forwarded-For bằng IP thật của người kết nối (không tin giá trị client tự
+		# gửi), nên server đặt TRUST_PROXY=true là an toàn: rate limit nhận đúng IP người dùng.
 		reverse_proxy server:3000
 	}
 
 	handle {
 		root * /srv/web
+		# File trong /assets có hash trong tên: nội dung đổi thì tên đổi, nên giữ cache lâu được.
+		@hashed path /assets/*
+		header @hashed Cache-Control "public, max-age=31536000, immutable"
+		# index.html phải luôn hỏi lại máy chủ để nhận bản build mới (và CSP mới) ngay.
+		@page not path /assets/*
+		header @page Cache-Control "no-cache"
 		try_files {path} /index.html
 		file_server
 	}
 
 	header {
 		# 'wasm-unsafe-eval' BẮT BUỘC vì libsodium chạy bằng WebAssembly.
-		# Không có 'unsafe-inline', không có 'unsafe-eval'.
-		Content-Security-Policy "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+		# Không có 'unsafe-inline', không có 'unsafe-eval', không nguồn ngoài (D72).
+		# Dấu ? = chỉ đặt khi phản hồi chưa có: API giữ CSP chặt hơn của nó (default-src 'none').
+		?Content-Security-Policy "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+		# HSTS_MAX_AGE=0 khi demo localhost (không "khóa" trình duyệt vào HTTPS cho mọi cổng của
+		# localhost); đặt 31536000 (1 năm) khi có tên miền thật.
+		Strict-Transport-Security "max-age={$HSTS_MAX_AGE:0}"
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "no-referrer"
-		# Bật khi đã có HTTPS thật:
-		# Strict-Transport-Security "max-age=31536000"
+		Cross-Origin-Opener-Policy "same-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
 		-Server
 	}
 }

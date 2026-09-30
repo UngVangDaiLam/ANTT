@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeAll } from 'vitest';
+import { describe, test, expect, beforeAll, vi } from 'vitest';
 import sodium from 'libsodium-wrappers-sumo';
 import {
   generateKeyPair,
@@ -149,5 +149,25 @@ describe('sharing (hybrid X25519 + XChaCha20-Poly1305 + ky so Ed25519)', () => {
     await expect(unwrapNoteKeyFromSender(wrapped, bob.privateKey, alice.publicKey)).rejects.toThrow(
       TypeError,
     );
+  });
+});
+
+describe('vệ sinh bộ nhớ khi chia sẻ', () => {
+  test('khóa riêng tạm thời (ephemeral) bị xóa về 0 ngay sau khi dùng', async () => {
+    await sodium.ready;
+    const recipient = await generateKeyPair();
+    const sender = await generateSigningKeyPair();
+    const spy = vi.spyOn(sodium, 'crypto_box_keypair');
+
+    await wrapNoteKeyForRecipient(
+      sodium.randombytes_buf(32),
+      recipient.publicKey,
+      sender.privateKey,
+      crypto.randomUUID(),
+    );
+
+    const ephemeral = spy.mock.results[0].value;
+    spy.mockRestore();
+    expect(ephemeral.privateKey.every((b) => b === 0)).toBe(true);
   });
 });

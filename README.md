@@ -18,18 +18,6 @@ server chỉ là kho lưu trữ mù.
 | `deploy/`      | Trần Bảo        | Docker Compose, Caddy                                           |
 | `integration/` | Cả nhóm         | Chỉ chứa test: client-sdk thật gọi server thật qua HTTP         |
 
-> **Lưu ý khi pull bản có D65–D76** (thêm AD cho ciphertext, gói chia sẻ gắn với note, giao diện mới):
-> ghi chú mã hóa theo định dạng cũ **không còn giải mã được**. Sau khi pull, mỗi người chạy ở máy mình:
->
-> ```bash
-> pnpm install                                                   # web/ có thêm vitest
-> docker compose -f deploy/docker-compose.yml up -d
-> pnpm --filter @secure-notes/server exec prisma migrate reset   # XÓA toàn bộ dữ liệu database dev, gõ y
-> ```
->
-> Rồi đăng ký lại tài khoản. Database test (`securenotes_test`) không bị ảnh hưởng. Không cần xóa
-> dữ liệu trình duyệt: localStorage chỉ nhớ số phiên bản theo id ghi chú, ghi chú mới có id khác.
-
 ## Ranh giới bắt buộc
 
 Kiểm tra tự động bằng `pnpm depcheck` (dependency-cruiser), CI sẽ báo lỗi nếu vi phạm:
@@ -83,6 +71,48 @@ PostgreSQL thật.
 **Cảnh báo:** các bảng trong database đó bị xóa sạch trước mỗi test. Không bao giờ trỏ vào database dev
 đang có dữ liệu. Chi tiết ở `server/test/helpers/backends.js` và D54.
 
+## Kiểm tra giao diện bằng Chrome thật
+
+Đi hết các luồng chính (đăng ký, ghi chú, chia sẻ, thu hồi, xung đột, thiết bị, khổ điện thoại...) bằng
+Chrome headless, chụp ảnh từng bước vào `web/e2e/shots/`. Cần Chrome đã cài; không cần thư viện thêm.
+
+```bash
+pnpm dev:server             # cửa sổ 1 (cần PostgreSQL đang chạy)
+pnpm dev:web                # cửa sổ 2
+pnpm --filter @secure-notes/web ui-check
+
+# Hoặc với bản triển khai HTTPS:
+BASE=https://localhost/ pnpm --filter @secure-notes/web ui-check
+```
+
+- Script **tạo tài khoản thử** trong database của máy chủ đang chạy: chỉ dùng với máy dev hoặc bản demo.
+- Chạy lại nhiều lần liền có thể chạm giới hạn đăng nhập theo IP (10 lần / 15 phút). Khởi động lại
+  server là hết (giới hạn nằm trong bộ nhớ).
+- Chrome không ở chỗ mặc định thì đặt `CHROME_PATH`.
+
+## Triển khai (HTTPS)
+
+Chạy đủ bộ PostgreSQL + server + Caddy bằng Docker. Chỉ Caddy mở cổng (80, 443); database và server
+nằm trong mạng nội bộ, không ra được Internet (D77–D79).
+
+```bash
+cp deploy/.env.example deploy/.env
+# Điền POSTGRES_PASSWORD và SERVER_SECRET, mỗi giá trị tạo bằng:
+#   node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
+
+docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env up -d --build
+```
+
+Rồi mở https://localhost. Chứng chỉ do Caddy tự ký nên trình duyệt sẽ cảnh báo lần đầu; đó là bình
+thường khi demo trên máy.
+
+- **Tên miền thật:** trỏ DNS về máy chủ, mở cổng 80 và 443, rồi trong `deploy/.env` đặt
+  `SITE_ADDRESS=ten-mien-cua-ban` và `HSTS_MAX_AGE=31536000`. Caddy tự xin chứng chỉ Let's Encrypt.
+- **Xem log:** `docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env logs -f server`
+- **Dừng:** thay `up -d --build` bằng `down`. Thêm `-v` sẽ **xóa luôn dữ liệu** và chứng chỉ.
+- Bản triển khai dùng database riêng (volume của project `secure-notes`), không đụng database dev.
+- Cổng 80/443 đang bị chương trình khác chiếm (IIS, Skype…) thì phải tắt chương trình đó trước.
+
 ## Quy ước làm việc
 
 - **Toàn bộ repo dùng JavaScript + ESM** (`import`/`export`), không TypeScript. Thêm JSDoc cho các hàm quan trọng.
@@ -99,16 +129,37 @@ PostgreSQL thật.
 
 ## Benchmark Argon2id
 
-Tham số Argon2id (`KDF_DEFAULTS` trong `shared/src/config.js`) là đánh đổi giữa trải nghiệm và chi phí
-mà kẻ tấn công phải trả cho mỗi mật khẩu đoán thử khi chúng lấy được database. Đo trên máy mình:
+Tham số Argon2id (`KDF_DEFAULTS` trong `shared/src/config.js`: `opslimit = 3`, `memlimit = 64 MiB`) là
+đánh đổi giữa thời gian chờ khi đăng nhập và chi phí kẻ tấn công phải trả cho mỗi mật khẩu đoán thử khi
+lấy được database.
+
+**Kết quả** (máy đo: Intel Core i7-1185G7, 16 GB RAM, Windows 11, Chrome, Node 24; ngày 30/09/2026):
+
+| Đo gì                                         | Mức CPU                                 | Thời gian     |
+| --------------------------------------------- | --------------------------------------- | ------------- |
+| Một lần Argon2id trong Node (libsodium)       | Bình thường                             | 143 ms        |
+| Đăng nhập trọn vẹn trong Chrome (WebAssembly) | Bình thường                             | ~255–300 ms   |
+| Như trên                                      | Chậm 4 lần (≈ điện thoại tầm trung)     | ~1,3 giây     |
+| Như trên                                      | Chậm 6 lần (≈ điện thoại cấu hình thấp) | ~1,9–2,0 giây |
+
+"Đăng nhập trọn vẹn" tính từ lúc bấm nút tới lúc vào khung làm việc: tra salt, Argon2id, gọi `/login`,
+mở khóa và kiểm tra khóa công khai. Mức chậm 4x/6x là giả lập CPU của Chrome (các mức DevTools dùng
+cho điện thoại), trung vị của 3 lần đo; giả lập không làm chậm bộ nhớ, nên máy thật yếu có thể chậm hơn
+một chút. Dưới 2 giây cho một thao tác chỉ xảy ra khi đăng nhập là chấp nhận được, nên giữ tham số hiện
+tại. Mỗi lần đoán thử offline tốn 64 MiB RAM và cỡ 150 ms một nhân CPU hiện đại.
+
+Đo lại:
 
 ```bash
-pnpm --filter @secure-notes/crypto benchmark
+pnpm --filter @secure-notes/crypto benchmark                          # Argon2id trong Node, nhiều mức memlimit
+BASE=https://localhost/ pnpm --filter @secure-notes/web login-bench   # đăng nhập thật trong Chrome, CPU 1x/4x/6x
 ```
 
-Nên chạy thêm trên một máy yếu hơn và trên trình duyệt di động rồi ghi số liệu vào báo cáo.
-
 ## Hướng dẫn Demo Giao diện Web (Mã hóa đầu cuối)
+
+> Kịch bản đầy đủ cho buổi thuyết trình, gồm cả phần đóng vai máy chủ bị chiếm quyền và sửa thẳng
+> database: [`docs/DEMO.md`](docs/DEMO.md). Tài liệu bảo mật: [`SECURITY.md`](SECURITY.md),
+> [`docs/KEY_MANAGEMENT.md`](docs/KEY_MANAGEMENT.md).
 
 Dự án hỗ trợ 2 chế độ khởi chạy web. Tuỳ vào mục đích (test chức năng mạng hay chỉ thiết kế giao diện), bạn có thể chọn 1 trong 2 cách sau:
 
@@ -118,6 +169,7 @@ Dự án hỗ trợ 2 chế độ khởi chạy web. Tuỳ vào mục đích (te
 Dùng cách này khi bạn muốn demo luồng mạng (Network Tab) và kết nối CSDL thực tế.
 Mở 2 cửa sổ Terminal tại thư mục gốc của dự án:
 
+- **Trước đó:** `docker compose -f deploy/docker-compose.yml up -d` (bật PostgreSQL)
 - **Terminal 1:** `pnpm run dev:server` (bật máy chủ API)
 - **Terminal 2:** `pnpm run dev:web` (bật giao diện web)
 
@@ -125,9 +177,12 @@ Mở 2 cửa sổ Terminal tại thư mục gốc của dự án:
 Dùng cách này khi máy bạn không có Docker hoặc chỉ muốn test/thiết kế UI nhanh.
 
 1. Mở file `web/src/client.js`.
-2. Đổi `createFetchTransport()` thành `createMemoryTransport()` ở dòng 3.
-   _(Nhớ thêm `createMemoryTransport` vào phần import ở dòng 1)_
+2. Đổi `createFetchTransport()` thành `createMemoryTransport()`
+   _(nhớ thêm `createMemoryTransport` vào dòng import; **không commit** thay đổi này)_.
 3. Mở Terminal và gõ: `pnpm run dev:web`. Mọi dữ liệu sẽ lưu tạm trong RAM.
+
+**Cách C: Bản triển khai HTTPS** (giống khi nộp bài nhất): xem mục _Triển khai (HTTPS)_ ở trên,
+rồi mở https://localhost.
 
 _Lưu ý:_ Địa chỉ web `http://localhost:5173` (hoặc 5174) chỉ là địa chỉ cục bộ. Khi khởi động lại máy, bạn cần chạy lại lệnh để vào web.
 
@@ -147,6 +202,16 @@ _(Chỉ dùng được nếu bạn chạy theo Cách A ở trên)_
 1. Mở một trình duyệt ẩn danh (Incognito Window), tạo một tài khoản phụ thứ hai (VD: `nguoinhan@example.com`).
 2. Trên trình duyệt chứa tài khoản chính, chọn một ghi chú và bấm **Chia sẻ**.
 3. Nhập email tài khoản phụ và bấm **Tiếp tục**.
-4. Hộp thoại sẽ hiển thị **Mã xác nhận (Fingerprint)**. Đây là cơ chế phòng thủ chéo: hai bên phải gọi điện/nhắn tin đọc mã cho nhau nghe để xác nhận không có tin tặc giả mạo khóa.
-5. Sau khi tích xác nhận đã đối chiếu thủ công, bấm **Xác nhận chia sẻ**.
+4. Hộp thoại hiển thị **mã khóa (fingerprint)** của người nhận. Bên tài khoản phụ, bấm biểu tượng
+   khiên ở góc dưới thanh bên (**Mã xác minh của tôi**): mã này được tính ngay trên máy họ, không lấy
+   từ máy chủ. Hai bên đọc mã cho nhau để chắc máy chủ không tráo khóa.
+5. Nút **Chia sẻ** chỉ bấm được sau khi tích ô xác nhận đã đối chiếu. Nếu máy chủ đổi khóa giữa lúc
+   hiển thị mã và lúc chia sẻ, ứng dụng từ chối (D75).
 6. Trình duyệt tài khoản phụ lúc này sẽ nhận được dữ liệu (nhưng vẫn là chuỗi mã hóa qua mạng), và nó tự dùng khóa bí mật của chính nó để giải mã.
+
+### 4. Kịch bản Demo 3: Thu hồi quyền
+
+1. Trong hộp thoại **Chia sẻ**, chuyển sang tab **Người có quyền**.
+2. **Thu hồi quyền**: ghi chú được mã hóa lại bằng khóa mới, nên tài khoản phụ không mở được nữa kể cả
+   nếu từng giữ khóa cũ. So với **Chỉ gỡ khỏi danh sách**: chỉ máy chủ ngừng cho đọc, khóa không đổi
+   (D62).

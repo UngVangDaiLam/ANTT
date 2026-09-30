@@ -17,6 +17,12 @@ async function securityPlugin(app) {
     hsts: app.config.isProduction,
   });
 
+  // ASVS 14.3.2: không trình duyệt hay proxy nào được giữ bản sao phản hồi API (ciphertext, salt,
+  // danh sách chia sẻ). Đặt ở onRequest để cả phản hồi lỗi cũng có.
+  app.addHook('onRequest', async (request, reply) => {
+    reply.header('Cache-Control', 'no-store');
+  });
+
   // Chống CSRF: request thay đổi dữ liệu mà có Origin lạ thì từ chối.
   // (Kết hợp với cookie SameSite=Strict.)
   app.addHook('onRequest', async (request) => {

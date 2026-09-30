@@ -25,9 +25,8 @@ describe.each(backends)('chia sẻ [$name]', (backend) => {
   const share = (user, noteId, recipientEmail, pkg = sharePackage()) =>
     user.req('POST', `/api/notes/${noteId}/shares`, { recipientEmail, sharePackage: pkg });
 
-  describe('GET /api/users/:email/keys', () => {
-    const keys = (user, email, extra) =>
-      user.req('GET', `/api/users/${encodeURIComponent(email)}/keys`, undefined, extra);
+  describe('POST /api/users/keys', () => {
+    const keys = (user, email, extra) => user.req('POST', '/api/users/keys', { email }, extra);
 
     test('trả đúng hai khóa công khai của người đó và không gì khác', async () => {
       const res = await keys(alice, 'bob@example.com');

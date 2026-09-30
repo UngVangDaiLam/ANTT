@@ -37,7 +37,7 @@ function isOperatorObject(value) {
     typeof value === 'object' &&
     !isBytes(value) &&
     !(value instanceof Date) &&
-    ('not' in value || 'in' in value || 'notIn' in value)
+    ('not' in value || 'in' in value || 'notIn' in value || 'gt' in value)
   );
 }
 
@@ -57,6 +57,7 @@ function matches(row, where) {
     if ('not' in condition && valuesEqual(row[key], condition.not)) return false;
     if ('in' in condition && !condition.in.some((v) => valuesEqual(row[key], v))) return false;
     if ('notIn' in condition && condition.notIn.some((v) => valuesEqual(row[key], v))) return false;
+    if ('gt' in condition && !(row[key] > condition.gt)) return false;
     return true;
   });
 }
@@ -129,6 +130,21 @@ export function createFakeDb() {
         for (const row of rows) Object.assign(row, data);
         return { count: rows.length };
       },
+      async deleteMany({ where }) {
+        return deleteMany(users, where, (user) => {
+          // Các onDelete trong schema.prisma: Cascade cho Session, Note (kéo theo Share của note),
+          // Share gửi đi và nhận về; SetNull cho LoginHistory.
+          deleteMany(sessions, { userId: user.id });
+          deleteMany(notes, { ownerId: user.id }, (note) =>
+            deleteMany(shares, { noteId: note.id }),
+          );
+          deleteMany(shares, { senderId: user.id });
+          deleteMany(shares, { recipientId: user.id });
+          for (const record of loginRecords) {
+            if (record.userId === user.id) record.userId = null;
+          }
+        });
+      },
     },
 
     session: {
@@ -140,6 +156,9 @@ export function createFakeDb() {
       },
       async findUnique({ where, select }) {
         return project(sessions.get(where.id), select);
+      },
+      async findMany({ where, orderBy, select }) {
+        return orderRows(rowsOf(sessions, where), orderBy).map((row) => project(row, select));
       },
       async updateMany({ where, data }) {
         const rows = rowsOf(sessions, where);
@@ -153,9 +172,41 @@ export function createFakeDb() {
 
     loginHistory: {
       async create({ data }) {
-        const row = { id: crypto.randomUUID(), createdAt: now(), ...data };
+        const row = {
+          id: crypto.randomUUID(),
+          createdAt: now(),
+          kind: 'login',
+          ip: null,
+          userAgent: null,
+          ...data,
+        };
         loginRecords.push(row);
         return clone(row);
+      },
+      async deleteMany({ where }) {
+        const before = loginRecords.length;
+        const kept = loginRecords.filter((row) => !matches(row, where));
+        loginRecords.splice(0, loginRecords.length, ...kept);
+        return { count: before - kept.length };
+      },
+      async updateMany({ where, data }) {
+        const rows = loginRecords.filter((row) => matches(row, where));
+        for (const row of rows) Object.assign(row, data);
+        return { count: rows.length };
+      },
+      async findFirst({ where, orderBy, select }) {
+        const rows = orderRows(
+          loginRecords.filter((row) => matches(row, where)),
+          orderBy,
+        );
+        return project(rows[0], select);
+      },
+      async findMany({ where, orderBy, take, select }) {
+        const rows = orderRows(
+          loginRecords.filter((row) => matches(row, where)),
+          orderBy,
+        );
+        return rows.slice(0, take ?? rows.length).map((row) => project(row, select));
       },
     },
 
@@ -237,6 +288,7 @@ export function createFakeDb() {
       sessions: clone([...sessions]),
       notes: clone([...notes]),
       shares: clone([...shares]),
+      loginRecords: clone(loginRecords),
     };
     try {
       return await callback(db);
@@ -250,6 +302,7 @@ export function createFakeDb() {
         map.clear();
         for (const [key, row] of entries) map.set(key, row);
       }
+      loginRecords.splice(0, loginRecords.length, ...snapshot.loginRecords);
       throw err;
     }
   }

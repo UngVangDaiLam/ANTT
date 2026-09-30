@@ -1,9 +1,10 @@
 import {
+  AUTH_ATTEMPT_KINDS,
   AppError,
   ChangePasswordRequest,
-  EmailParams,
+  DeleteAccountRequest,
+  EmailRequest,
   KDF_DEFAULTS,
-  LIMITS,
   LoginRequest,
   RATE_LIMITS,
   RegisterRequest,
@@ -13,6 +14,11 @@ import {
   normalizeEmail,
 } from '@secure-notes/shared';
 import { toSelfAccount } from '../lib/account.js';
+import {
+  clientUserAgent,
+  enforceAccountThrottle,
+  recordAuthAttempt,
+} from '../lib/auth-attempts.js';
 import { hashAuthKey, verifyAuthKey } from '../lib/auth-key.js';
 import { fakeSaltFor } from '../lib/fake-salt.js';
 import {
@@ -36,12 +42,6 @@ const COOKIE_OPTIONS = Object.freeze({
   secure: true, // bắt buộc với tiền tố __Host-
   sameSite: 'strict', // cùng với kiểm tra Origin ở plugins/security.js để chống CSRF
 });
-
-/** Cắt User-Agent để header khổng lồ không làm phình bảng Session/LoginHistory. */
-function clientUserAgent(request) {
-  const ua = request.headers['user-agent'];
-  return typeof ua === 'string' ? ua.slice(0, LIMITS.MAX_USER_AGENT_LENGTH) : null;
-}
 
 /**
  * Route tài khoản và phiên đăng nhập. Cần `app.db` là Prisma client (hoặc đối tượng giả cùng
@@ -89,16 +89,16 @@ export default async function authRoutes(app) {
     },
   );
 
-  app.get(
-    '/users/:email/salt',
+  app.post(
+    '/users/salt',
     {
-      schema: { params: EmailParams, response: { 200: SaltResponse } },
+      schema: { body: EmailRequest, response: { 200: SaltResponse } },
       config: {
         rateLimit: { max: RATE_LIMITS.SALT.max, timeWindow: RATE_LIMITS.SALT.timeWindowMs },
       },
     },
     async (request) => {
-      const email = normalizeEmail(request.params.email);
+      const email = normalizeEmail(request.body.email);
       const user = await app.db.user.findUnique({
         where: { email },
         select: { salt: true, kdfOpslimit: true, kdfMemlimit: true },
@@ -128,6 +128,9 @@ export default async function authRoutes(app) {
     },
     async (request, reply) => {
       const email = normalizeEmail(request.body.email);
+      // D81: giới hạn theo tài khoản, chạy TRƯỚC khi kiểm tra mật khẩu và giống hệt nhau dù email có
+      // tồn tại hay không.
+      await enforceAccountThrottle(app.db, reply, email);
       const user = await app.db.user.findUnique({ where: { email } });
 
       // Luôn chạy phép so sánh, kể cả khi email không tồn tại, để hai trường hợp khó phân biệt
@@ -138,15 +141,12 @@ export default async function authRoutes(app) {
       );
       const success = Boolean(user) && authKeyMatches;
 
-      // Ghi cả lần thất bại (ASVS 16.3.1). Không ghi authKey, cookie hay bất cứ khóa nào.
-      await app.db.loginHistory.create({
-        data: {
-          userId: user ? user.id : null,
-          emailAttempted: email,
-          success,
-          ip: request.ip,
-          userAgent: clientUserAgent(request),
-        },
+      // Ghi cả lần thất bại (ASVS 16.3.1).
+      await recordAuthAttempt(app.db, request, {
+        userId: user ? user.id : null,
+        email,
+        success,
+        kind: AUTH_ATTEMPT_KINDS.LOGIN,
       });
 
       // Cùng một lỗi và cùng một thông điệp cho "không có tài khoản" và "sai mật khẩu".
@@ -204,9 +204,19 @@ export default async function authRoutes(app) {
       // được máy đang đăng nhập vẫn không đổi được mật khẩu.
       const user = await app.db.user.findUnique({
         where: { id: userId },
-        select: { id: true, authKeyHash: true },
+        select: { id: true, email: true, authKeyHash: true },
       });
-      if (!user || !verifyAuthKey(body.oldAuthKey, user.authKeyHash)) {
+      if (!user) throw new AppError('UNAUTHENTICATED');
+      // D81: mật khẩu cũ cũng là một chỗ đoán mật khẩu, chung giới hạn với đăng nhập.
+      await enforceAccountThrottle(app.db, reply, user.email);
+      const oldKeyMatches = verifyAuthKey(body.oldAuthKey, user.authKeyHash);
+      await recordAuthAttempt(app.db, request, {
+        userId,
+        email: user.email,
+        success: oldKeyMatches,
+        kind: AUTH_ATTEMPT_KINDS.CHANGE_PASSWORD,
+      });
+      if (!oldKeyMatches) {
         throw new AppError('INVALID_CREDENTIALS', 'Mật khẩu cũ không đúng.');
       }
 
@@ -233,6 +243,56 @@ export default async function authRoutes(app) {
         await tx.session.deleteMany({ where: { userId, id: { not: sessionId } } });
       });
 
+      return reply.code(204).send();
+    },
+  );
+
+  app.post(
+    '/account/delete',
+    {
+      onRequest: app.authenticate,
+      schema: { body: DeleteAccountRequest },
+      config: {
+        rateLimit: {
+          max: RATE_LIMITS.DELETE_ACCOUNT.max,
+          timeWindow: RATE_LIMITS.DELETE_ACCOUNT.timeWindowMs,
+        },
+      },
+    },
+    async (request, reply) => {
+      const { userId } = request.auth;
+      const user = await app.db.user.findUnique({
+        where: { id: userId },
+        select: { id: true, email: true, authKeyHash: true },
+      });
+      if (!user) throw new AppError('UNAUTHENTICATED');
+
+      // Như đổi mật khẩu (D25) và đăng xuất từ xa (D80): cookie phiên là chưa đủ.
+      await enforceAccountThrottle(app.db, reply, user.email);
+      if (!verifyAuthKey(request.body.authKey, user.authKeyHash)) {
+        await recordAuthAttempt(app.db, request, {
+          userId,
+          email: user.email,
+          success: false,
+          kind: AUTH_ATTEMPT_KINDS.DELETE_ACCOUNT,
+        });
+        throw new AppError('INVALID_CREDENTIALS', 'Mật khẩu không đúng.');
+      }
+
+      await app.db.$transaction(async (tx) => {
+        // LoginHistory chỉ SetNull khi xóa User, nên phải tự xóa: nếu không, email, IP và thiết bị
+        // của người đã xóa tài khoản vẫn nằm lại trong DB.
+        await tx.loginHistory.deleteMany({ where: { userId } });
+        await tx.loginHistory.deleteMany({ where: { emailAttempted: user.email } });
+        // Phiên, note (kèm các lượt chia sẻ của note), lượt chia sẻ gửi đi và nhận về đều bị xóa theo
+        // onDelete: Cascade. Điều kiện authKeyHash: đổi mật khẩu đồng thời thì không xóa nhầm.
+        const { count } = await tx.user.deleteMany({
+          where: { id: userId, authKeyHash: user.authKeyHash },
+        });
+        if (count !== 1) throw new AppError('INVALID_CREDENTIALS', 'Mật khẩu không đúng.');
+      });
+
+      reply.clearCookie(SESSION.COOKIE_NAME, COOKIE_OPTIONS);
       return reply.code(204).send();
     },
   );

@@ -1,6 +1,6 @@
 import {
   AppError,
-  EmailParams,
+  EmailRequest,
   IdParams,
   NoteShareListResponse,
   RATE_LIMITS,
@@ -24,11 +24,11 @@ const PRISMA_FOREIGN_KEY_VIOLATION = 'P2003';
 export default async function shareRoutes(app) {
   const auth = { onRequest: app.authenticate };
 
-  app.get(
-    '/users/:email/keys',
+  app.post(
+    '/users/keys',
     {
       ...auth,
-      schema: { params: EmailParams, response: { 200: UserKeysResponse } },
+      schema: { body: EmailRequest, response: { 200: UserKeysResponse } },
       config: {
         rateLimit: {
           max: RATE_LIMITS.USER_KEYS.max,
@@ -38,7 +38,7 @@ export default async function shareRoutes(app) {
     },
     async (request) => {
       const user = await app.db.user.findUnique({
-        where: { email: normalizeEmail(request.params.email) },
+        where: { email: normalizeEmail(request.body.email) },
         select: { x25519PublicKey: true, ed25519PublicKey: true },
       });
       if (!user) throw new AppError('NOT_FOUND');

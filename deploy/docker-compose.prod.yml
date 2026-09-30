@@ -1,0 +1,105 @@
+# Triển khai đủ bộ: PostgreSQL + server + Caddy (HTTPS, giao diện). Hướng dẫn ở README, mục "Triển khai".
+#
+#   cp deploy/.env.example deploy/.env      # rồi điền bí mật
+#   docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env up -d --build
+#
+# Khác với deploy/docker-compose.yml (chỉ có database cho máy dev):
+#   - database KHÔNG mở cổng ra ngoài, chỉ server gọi được qua mạng nội bộ `backend`;
+#   - server cũng không mở cổng, chỉ Caddy gọi được; ra Internet chỉ có Caddy (80, 443);
+#   - mọi bí mật lấy từ deploy/.env, thiếu là dừng ngay chứ không chạy với giá trị mặc định.
+
+name: secure-notes
+
+x-server-env: &server-env
+  NODE_ENV: production
+  DATABASE_URL: postgresql://securenotes:${POSTGRES_PASSWORD:?Đặt POSTGRES_PASSWORD trong deploy/.env}@db:5432/securenotes
+
+services:
+  db:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: securenotes
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Đặt POSTGRES_PASSWORD trong deploy/.env}
+      POSTGRES_DB: securenotes
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks: [backend]
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U securenotes -d securenotes']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Chạy migration một lần rồi thoát; server chỉ khởi động khi bước này thành công.
+  migrate:
+    build: &server-build
+      context: ..
+      dockerfile: deploy/Dockerfile
+      target: server
+    image: secure-notes-server
+    environment: *server-env
+    command: ['npx', 'prisma', 'migrate', 'deploy']
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [backend]
+    restart: 'no'
+
+  server:
+    build: *server-build
+    image: secure-notes-server
+    restart: unless-stopped
+    environment:
+      <<: *server-env
+      HOST: 0.0.0.0
+      PORT: 3000
+      ALLOWED_ORIGINS: https://${SITE_ADDRESS:-localhost}
+      SERVER_SECRET: ${SERVER_SECRET:?Đặt SERVER_SECRET trong deploy/.env}
+      # Chỉ Caddy gọi tới server (server không mở cổng ra ngoài), nên tin X-Forwarded-For là an toàn.
+      TRUST_PROXY: 'true'
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks: [backend, proxy]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+
+  web:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      target: web
+    image: secure-notes-web
+    restart: unless-stopped
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-localhost}
+      HSTS_MAX_AGE: ${HSTS_MAX_AGE:-0}
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp' # HTTP/3
+    volumes:
+      - caddy_data:/data # chứng chỉ và khóa TLS: phải giữ lại giữa các lần khởi động
+      - caddy_config:/config
+    depends_on: [server]
+    networks: [proxy, edge]
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: ['no-new-privileges:true']
+
+# Chỉ Caddy nằm trên mạng có đường ra Internet (edge). Database và server nằm trên mạng internal:
+# không container nào trong đó tự gọi ra ngoài được, kể cả khi server bị chiếm quyền.
+networks:
+  backend: # db <-> server, migrate
+    internal: true
+  proxy: # server <-> Caddy
+    internal: true
+  edge: # Caddy <-> Internet (cổng 80, 443; xin chứng chỉ Let's Encrypt)
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

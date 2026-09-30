@@ -21,12 +21,43 @@ function loggableError(error) {
   return error;
 }
 
+/**
+ * Mã lỗi là sự kiện bảo mật đáng ghi lại (ASVS 16.3.2): bị từ chối quyền, chưa đăng nhập, sai mật
+ * khẩu, bị giới hạn tần suất. NOT_FOUND nằm ở đây vì truy cập note của người khác trả NOT_FOUND (D30).
+ */
+const SECURITY_EVENT_CODES = new Set([
+  'UNAUTHENTICATED',
+  'FORBIDDEN',
+  'NOT_FOUND',
+  'INVALID_CREDENTIALS',
+  'RATE_LIMITED',
+]);
+
+/**
+ * Ghi mẫu route (`/api/notes/:id`) chứ không ghi URL thật. Không ghi header, cookie hay body (nơi có
+ * email, D85).
+ */
+function logSecurityEvent(request, code) {
+  request.log.warn(
+    {
+      event: 'access_denied',
+      code,
+      userId: request.auth?.userId ?? null,
+      method: request.method,
+      route: request.routeOptions?.url ?? null,
+      ip: request.ip,
+    },
+    'Từ chối yêu cầu',
+  );
+}
+
 /** Mọi lỗi trả về đúng một định dạng { code, message }, không lộ stack trace. */
 async function errorsPlugin(app) {
   app.setErrorHandler((error, request, reply) => {
     let appError;
     if (error instanceof AppError) {
       appError = error;
+      if (SECURITY_EVENT_CODES.has(appError.code)) logSecurityEvent(request, appError.code);
     } else if (error.code === 'FST_ERR_CTP_BODY_TOO_LARGE') {
       appError = new AppError('PAYLOAD_TOO_LARGE');
     } else if (error.validation || (error.statusCode >= 400 && error.statusCode < 500)) {

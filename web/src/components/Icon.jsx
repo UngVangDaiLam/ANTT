@@ -27,6 +27,7 @@ const PATHS = {
   note: 'M6 3h9l5 5v13H6zM14 3v6h6M9 13h7M9 17h5',
   copy: 'M9 9h11v11H9zM5 15H4V4h11v1',
   clock: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3 2',
+  device: 'M3 5h18v11H3zM8 20h8M12 16v4',
   inbox: 'M3 13h5l2 3h4l2-3h5M5 5h14l2 8v6H3v-6z',
 };
 

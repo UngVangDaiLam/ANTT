@@ -88,6 +88,8 @@ model LoginHistory {
   userId         String?  @db.Uuid // null nếu email không tồn tại
   emailAttempted String
   success        Boolean
+  /// Loại lần nhập mật khẩu: login | change_password | revoke_sessions (AUTH_ATTEMPT_KINDS)
+  kind           String   @default("login")
   ip             String?
   userAgent      String?
   createdAt      DateTime @default(now())
@@ -95,4 +97,6 @@ model LoginHistory {
   user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([userId, createdAt])
+  // Giới hạn theo tài khoản (D81) đếm lần sai theo email trong một khoảng thời gian gần đây.
+  @@index([emailAttempted, createdAt])
 }

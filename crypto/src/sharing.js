@@ -171,6 +171,8 @@ export async function wrapNoteKeyForRecipient(
   const context = shareContext(noteId);
   const ephemeral = sodium.crypto_box_keypair();
   const sharedSecret = sodium.crypto_scalarmult(ephemeral.privateKey, recipientPublicKey);
+  // Khoa rieng tam thoi chi dung dung mot lan: xoa ngay, khong de lai trong bo nho.
+  sodium.memzero(ephemeral.privateKey);
   const wrapKey = deriveSharedKey(sharedSecret, ephemeral.publicKey, recipientPublicKey);
   sodium.memzero(sharedSecret);
 

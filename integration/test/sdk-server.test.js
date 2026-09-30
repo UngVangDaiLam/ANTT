@@ -61,12 +61,53 @@ describe.each(backends)('client-sdk ↔ server [$name]', (backend) => {
       expect(b.reason).toMatchObject({ code: 'INVALID_CREDENTIALS' });
       // Email lạ vẫn đi hết luồng: nhận salt giả (D15), chạy Argon2id, rồi mới bị từ chối.
       expect(unknownEmail.browser.sent.map((r) => r.path)).toEqual([
-        '/api/users/khong-co%40example.com/salt',
+        '/api/users/salt',
         '/api/login',
       ]);
       expect(wrongPassword.client.isLoggedIn()).toBe(false);
       expect(wrongPassword.browser.cookies.size).toBe(0);
       expect(unknownEmail.browser.cookies.size).toBe(0);
+    });
+
+    test('đăng xuất thiết bị khác qua HTTP thật: cookie của thiết bị đó hết dùng được', async () => {
+      const laptop = user();
+      const phone = user();
+      await laptop.client.register('alice@example.com', 'mat-khau-cua-alice');
+      await phone.client.login('alice@example.com', 'mat-khau-cua-alice');
+      await expect(phone.client.loginHistory()).resolves.toHaveLength(2);
+
+      const sessions = await laptop.client.listSessions();
+      expect(sessions).toHaveLength(2);
+      const other = sessions.find((s) => !s.current);
+
+      await expect(
+        laptop.client.revokeSessions('mat-khau-sai-roi', other.id),
+      ).rejects.toMatchObject({ code: 'INVALID_CREDENTIALS' });
+      await expect(laptop.client.revokeSessions('mat-khau-cua-alice', other.id)).resolves.toEqual({
+        revoked: 1,
+      });
+
+      await expect(phone.client.listNotes()).rejects.toMatchObject({ code: 'UNAUTHENTICATED' });
+      expect(await laptop.client.listSessions()).toHaveLength(1);
+    });
+
+    test('xóa tài khoản qua HTTP thật: note chia sẻ biến mất ở người nhận, email đăng ký lại được', async () => {
+      const alice = user();
+      const bob = user();
+      await alice.client.register('alice@example.com', 'mat-khau-cua-alice');
+      await bob.client.register('bob@example.com', 'mat-khau-cua-bob');
+      const { id } = await alice.client.createNote({ title: 'Cho Bob', content: 'x' });
+      await alice.client.shareNote(id, 'bob@example.com');
+
+      await expect(alice.client.deleteAccount('mat-khau-sai-roi')).rejects.toMatchObject({
+        code: 'INVALID_CREDENTIALS',
+      });
+      await alice.client.deleteAccount('mat-khau-cua-alice');
+
+      expect(alice.client.isLoggedIn()).toBe(false);
+      expect(await bob.client.listSharedWithMe()).toEqual([]);
+      await expect(bob.client.readNote(id)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+      await user().client.register('alice@example.com', 'mot-mat-khau-moi-han');
     });
 
     test('đăng ký trùng email báo EMAIL_TAKEN', async () => {

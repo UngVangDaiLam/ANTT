@@ -17,9 +17,20 @@
  * @typedef {object} VersionStore
  * @property {(scope: string, noteId: string) => number | undefined} get
  * @property {(scope: string, noteId: string, version: number) => void} set
+ * @property {(scope: string) => void} forget xóa mọi dòng của một người dùng (khi xóa tài khoản)
  */
 
 const entryKey = (scope, noteId) => `${scope}|${noteId}`;
+
+/** Khóa `key` có thuộc đúng `scope` không. noteId là UUID nên không chứa `|`. */
+const inScope = (key, scope) =>
+  key.startsWith(`${scope}|`) && !key.slice(scope.length + 1).includes('|');
+
+function forgetIn(seen, scope) {
+  for (const key of [...seen.keys()]) {
+    if (inScope(key, scope)) seen.delete(key);
+  }
+}
 
 /**
  * Lưu trong bộ nhớ: mất khi tải lại trang. Mặc định của SecureNoteClient.
@@ -30,6 +41,7 @@ export function createMemoryVersionStore() {
   return {
     get: (scope, noteId) => seen.get(entryKey(scope, noteId)),
     set: (scope, noteId, version) => seen.set(entryKey(scope, noteId), version),
+    forget: (scope) => forgetIn(seen, scope),
   };
 }
 
@@ -60,15 +72,23 @@ export function createLocalStorageVersionStore(
     // Dữ liệu hỏng hoặc không đọc được: bắt đầu lại từ trống.
   }
 
+  function persist() {
+    try {
+      storage.setItem(storageKey, JSON.stringify(Object.fromEntries(seen)));
+    } catch {
+      // Không ghi được thì vẫn nhớ trong bộ nhớ cho tới khi tải lại trang.
+    }
+  }
+
   return {
     get: (scope, noteId) => seen.get(entryKey(scope, noteId)),
     set(scope, noteId, version) {
       seen.set(entryKey(scope, noteId), version);
-      try {
-        storage.setItem(storageKey, JSON.stringify(Object.fromEntries(seen)));
-      } catch {
-        // Không ghi được thì vẫn nhớ trong bộ nhớ cho tới khi tải lại trang.
-      }
+      persist();
+    },
+    forget(scope) {
+      forgetIn(seen, scope);
+      persist();
     },
   };
 }

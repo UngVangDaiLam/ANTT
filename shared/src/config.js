@@ -34,6 +34,33 @@ export const LIMITS = Object.freeze({
   MAX_EMAIL_LENGTH: 254,
   /** Cắt User-Agent trước khi lưu vào phiên và lịch sử đăng nhập, tránh header khổng lồ làm phình DB. */
   MAX_USER_AGENT_LENGTH: 512,
+  /** IPv6 dài nhất ở dạng chữ là 45 ký tự; để dư cho dạng có zone (`fe80::1%eth0`). */
+  MAX_IP_LENGTH: 64,
+  /** GET /api/login-history trả tối đa bấy nhiêu lần gần nhất. */
+  LOGIN_HISTORY_LIMIT: 50,
+});
+
+/**
+ * Giới hạn theo TÀI KHOẢN (ASVS 6.3.1, D81), bổ sung cho RATE_LIMITS vốn chỉ tính theo IP: kẻ có
+ * nhiều IP vẫn không đoán mật khẩu một tài khoản nhanh được. Đếm lần nhập sai mật khẩu theo email
+ * (cả đăng nhập lẫn nhập lại mật khẩu) kể từ lần đúng gần nhất, trong WINDOW_MS gần đây. Sau
+ * FREE_FAILURES lần sai, phải chờ BASE_DELAY_MS, rồi gấp đôi mỗi lần sai tiếp, tối đa MAX_DELAY_MS.
+ * Chờ chứ không khóa hẳn: khóa hẳn thì ai cũng khóa được tài khoản của người khác.
+ */
+export const ACCOUNT_THROTTLE = Object.freeze({
+  FREE_FAILURES: 5,
+  BASE_DELAY_MS: 60 * 1000,
+  MAX_DELAY_MS: 15 * 60 * 1000,
+  WINDOW_MS: 60 * 60 * 1000,
+});
+
+/** Các loại lần nhập mật khẩu ghi trong lịch sử (cột `LoginHistory.kind`). */
+export const AUTH_ATTEMPT_KINDS = Object.freeze({
+  LOGIN: 'login',
+  CHANGE_PASSWORD: 'change_password',
+  REVOKE_SESSIONS: 'revoke_sessions',
+  /** Chỉ lần SAI mới còn lại trong lịch sử: xóa thành công thì lịch sử bị xóa theo tài khoản. */
+  DELETE_ACCOUNT: 'delete_account',
 });
 
 /** Kích thước (byte) các giá trị nhị phân, theo hằng số của libsodium. Server dùng để kiểm tra độ dài. */
@@ -54,6 +81,13 @@ export const RATE_LIMITS = Object.freeze({
   SALT: { max: 30, timeWindowMs: 15 * 60 * 1000 },
   /** Đổi mật khẩu cũng là một chỗ thử `oldAuthKey`, nên phải chặt như đăng nhập. */
   CHANGE_PASSWORD: { max: 5, timeWindowMs: 15 * 60 * 1000 },
+  /**
+   * Đăng xuất thiết bị khác phải nhập lại mật khẩu (ASVS 7.5.2), nên cũng là một chỗ thử `authKey`.
+   * Một route duy nhất (POST /sessions/revoke) để mọi lần thử dùng chung một ngưỡng.
+   */
+  REVOKE_SESSIONS: { max: 5, timeWindowMs: 15 * 60 * 1000 },
+  /** Xóa tài khoản cũng phải nhập lại mật khẩu, nên là một chỗ thử `authKey`. */
+  DELETE_ACCOUNT: { max: 5, timeWindowMs: 15 * 60 * 1000 },
   /** Tra khóa công khai xác nhận email có tồn tại, nên không để dò hàng loạt. */
   USER_KEYS: { max: 60, timeWindowMs: 15 * 60 * 1000 },
 });

@@ -20,12 +20,15 @@
 import { Value } from '@sinclair/typebox/value';
 import {
   ErrorBody,
+  LoginHistoryResponse,
   NoteListResponse,
   NoteShareListResponse,
   NoteResponse,
   NoteWriteResponse,
   SaltResponse,
+  RevokeSessionsResponse,
   SelfAccountResponse,
+  SessionListResponse,
   ShareCreatedResponse,
   ShareListResponse,
   UserKeysResponse,
@@ -87,8 +90,8 @@ export function createFetchTransport(baseUrl = '', { fetch: fetchImpl = globalTh
     },
 
     async getSalt(email) {
-      const data = await callApi('GET', `/users/${encodeURIComponent(email)}/salt`);
-      return assertSchema(SaltResponse, data, 'GET /api/users/:email/salt');
+      const data = await callApi('POST', '/users/salt', { email });
+      return assertSchema(SaltResponse, data, 'POST /api/users/salt');
     },
 
     async login(payload) {
@@ -104,9 +107,13 @@ export function createFetchTransport(baseUrl = '', { fetch: fetchImpl = globalTh
       await callApi('POST', '/change-password', payload);
     },
 
+    async deleteAccount(payload) {
+      await callApi('POST', '/account/delete', payload);
+    },
+
     async getUserKeys(email) {
-      const data = await callApi('GET', `/users/${encodeURIComponent(email)}/keys`);
-      return assertSchema(UserKeysResponse, data, 'GET /api/users/:email/keys');
+      const data = await callApi('POST', '/users/keys', { email });
+      return assertSchema(UserKeysResponse, data, 'POST /api/users/keys');
     },
 
     async createNote(payload) {
@@ -155,6 +162,21 @@ export function createFetchTransport(baseUrl = '', { fetch: fetchImpl = globalTh
     async listSharedWithMe() {
       const data = await callApi('GET', '/shares');
       return assertSchema(ShareListResponse, data, 'GET /api/shares');
+    },
+
+    async listSessions() {
+      const data = await callApi('GET', '/sessions');
+      return assertSchema(SessionListResponse, data, 'GET /api/sessions');
+    },
+
+    async revokeSessions(payload) {
+      const data = await callApi('POST', '/sessions/revoke', payload);
+      return assertSchema(RevokeSessionsResponse, data, 'POST /api/sessions/revoke');
+    },
+
+    async getLoginHistory() {
+      const data = await callApi('GET', '/login-history');
+      return assertSchema(LoginHistoryResponse, data, 'GET /api/login-history');
     },
   };
 }

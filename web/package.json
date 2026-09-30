@@ -8,7 +8,9 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "ui-check": "node e2e/ui-check.mjs",
+    "login-bench": "node e2e/login-bench.mjs"
   },
   "dependencies": {
     "@secure-notes/client-sdk": "workspace:*",
@@ -16,7 +18,10 @@
     "react-dom": "^19.3.0"
   },
   "devDependencies": {
+    "@testing-library/dom": "^10.4.2",
+    "@testing-library/react": "^16.3.3",
     "@vitejs/plugin-react": "^6.1.1",
+    "happy-dom": "^20.14.5",
     "vite": "^8.3.0",
     "vitest": "^5.0.1"
   }

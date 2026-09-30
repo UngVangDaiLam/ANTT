@@ -594,7 +594,7 @@ describe.each(backends)('route cần đăng nhập [$name]', (backend) => {
     ['GET', `/api/notes/${id}/shares`],
     ['GET', '/api/shares'],
     ['DELETE', `/api/shares/${id}`],
-    ['GET', '/api/users/bob%40example.com/keys'],
+    ['POST', '/api/users/keys'],
   ];
 
   test.each(routes)('%s %s không có cookie trả 401 UNAUTHENTICATED', async (method, url) => {

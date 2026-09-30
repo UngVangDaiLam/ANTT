@@ -18,13 +18,15 @@
  * @typedef {object} Transport
  * @property {(payload: object) => Promise<void>} register POST /api/register
  * @property {(email: string) => Promise<{salt: string, kdfParams: {opslimit: number, memlimit: number}}>} getSalt
- *   GET /api/users/:email/salt — email chưa đăng ký vẫn trả salt giả (D15)
+ *   POST /api/users/salt — email trong body; email chưa đăng ký vẫn trả salt giả (D15)
  * @property {(payload: {email: string, authKey: string}) => Promise<object>} login
  *   POST /api/login — đặt cookie phiên, trả về khóa đã bọc của chính mình
  * @property {() => Promise<void>} logout POST /api/logout
  * @property {(payload: object) => Promise<void>} changePassword POST /api/change-password
+ * @property {(payload: {authKey: string}) => Promise<void>} deleteAccount
+ *   POST /api/account/delete — xóa tài khoản và mọi dữ liệu, phải nhập lại mật khẩu
  * @property {(email: string) => Promise<{x25519PublicKey: string, ed25519PublicKey: string}>} getUserKeys
- *   GET /api/users/:email/keys
+ *   POST /api/users/keys — email trong body
  * @property {(payload: object) => Promise<{id: string, version: number, updatedAt: string}>} createNote
  *   POST /api/notes
  * @property {() => Promise<Array<object>>} listNotes GET /api/notes — không kèm nội dung
@@ -41,6 +43,12 @@
  * @property {(noteId: string, payload: object) => Promise<{id: string}>} shareNote
  *   POST /api/notes/:id/shares
  * @property {() => Promise<Array<object>>} listSharedWithMe GET /api/shares
+ * @property {() => Promise<Array<{id: string, current: boolean, createdAt: string, lastSeenAt: string, expiresAt: string, ip: string | null, userAgent: string | null}>>} listSessions
+ *   GET /api/sessions — các phiên còn hạn của chính mình
+ * @property {(payload: {authKey: string, sessionId?: string}) => Promise<{revoked: number}>} revokeSessions
+ *   POST /api/sessions/revoke — có sessionId: một thiết bị; không có: mọi thiết bị khác
+ * @property {() => Promise<Array<{id: string, success: boolean, kind: 'login' | 'change_password' | 'revoke_sessions', createdAt: string, ip: string | null, userAgent: string | null}>>} getLoginHistory
+ *   GET /api/login-history — các lần đăng nhập vào tài khoản mình, cả thất bại
  */
 
 export {};

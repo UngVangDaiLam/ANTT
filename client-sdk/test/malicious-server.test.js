@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, test } from 'vitest';
 import { SecureNoteClient } from '../src/client.js';
 import { createMemoryServer } from '../src/memoryTransport.js';
 import { ApiError } from '../src/apiError.js';
+import { createFetchTransport } from '../src/fetchTransport.js';
+import { LIMITS } from '@secure-notes/shared';
 import { createLocalStorageVersionStore, createMemoryVersionStore } from '../src/versionStore.js';
 
 /**
@@ -268,6 +270,30 @@ describe('nơi lưu version đã thấy', () => {
     };
   }
 
+  test.each([
+    ['bộ nhớ', () => createMemoryVersionStore()],
+    ['localStorage', () => createLocalStorageVersionStore(fakeStorage())],
+  ])('bản %s: forget chỉ xóa đúng người đó, kể cả khi email trùng phần đầu', (_, make) => {
+    const store = make();
+    store.set('a@x.com', 'n1', 3);
+    store.set('a@x.com|b', 'n1', 4); // email lạ nhưng không được đụng tới
+    store.set('b@x.com', 'n1', 5);
+
+    store.forget('a@x.com');
+
+    expect(store.get('a@x.com', 'n1')).toBeUndefined();
+    expect(store.get('a@x.com|b', 'n1')).toBe(4);
+    expect(store.get('b@x.com', 'n1')).toBe(5);
+  });
+
+  test('bản localStorage: forget ghi xuống storage, tải lại trang không thấy lại', () => {
+    const storage = fakeStorage();
+    const store = createLocalStorageVersionStore(storage);
+    store.set('a@x.com', 'n1', 3);
+    store.forget('a@x.com');
+    expect(createLocalStorageVersionStore(storage).get('a@x.com', 'n1')).toBeUndefined();
+  });
+
   test('bản bộ nhớ: tách riêng theo người dùng', () => {
     const store = createMemoryVersionStore();
     store.set('alice@example.com', 'n1', 5);
@@ -345,5 +371,49 @@ describe('nơi lưu version đã thấy', () => {
     // Chỉ lưu id note và version: không có khóa, không có nội dung.
     const raw = storage.data.get('secure-notes:seen-versions');
     expect(raw).not.toMatch(/Bản|ciphertext|nonce|Key/);
+  });
+});
+
+describe('fetchTransport kiểm tra phản hồi ngay khi nhận từ mạng', () => {
+  /** fetch giả trả đúng một phản hồi JSON, như một máy chủ độc hại. */
+  const respondWith = (body) =>
+    createFetchTransport('', {
+      fetch: async () => new Response(JSON.stringify(body), { status: 200 }),
+    });
+
+  const session = {
+    id: 'a'.repeat(64),
+    current: true,
+    createdAt: '2026-09-30T07:00:00.000Z',
+    lastSeenAt: '2026-09-30T07:00:00.000Z',
+    expiresAt: '2026-10-01T07:00:00.000Z',
+    ip: '203.0.113.5',
+    userAgent: 'Mozilla/5.0',
+  };
+
+  test('danh sách phiên đúng hợp đồng thì nhận', async () => {
+    await expect(respondWith([session]).listSessions()).resolves.toEqual([session]);
+  });
+
+  test('danh sách phiên bị chèn trường lạ (ví dụ token): INTEGRITY_ERROR', async () => {
+    await expect(respondWith([{ ...session, token: 'x' }]).listSessions()).rejects.toMatchObject({
+      code: 'INTEGRITY_ERROR',
+    });
+  });
+
+  test('lịch sử đăng nhập vượt số dòng tối đa: INTEGRITY_ERROR', async () => {
+    const entry = {
+      id: crypto.randomUUID(),
+      success: false,
+      kind: 'login',
+      createdAt: session.createdAt,
+      ip: null,
+      userAgent: null,
+    };
+    await expect(
+      respondWith(
+        Array.from({ length: LIMITS.LOGIN_HISTORY_LIMIT + 1 }, () => entry),
+      ).getLoginHistory(),
+    ).rejects.toMatchObject({ code: 'INTEGRITY_ERROR' });
   });
 });

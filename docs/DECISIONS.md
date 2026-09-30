@@ -303,3 +303,70 @@ nếu đổi ý thì ghi quyết định mới thay thế.
 - **D76. Thu hồi quyền khi đang sửa dở.** Thu hồi xoay khóa trên bản mới nhất ở máy chủ. Nếu bản đó
   không phải bản đang mở (thiết bị khác đã lưu xen giữa), giao diện không nhận version mới mà báo xung
   đột (đang sửa dở) hoặc tải lại (không sửa gì); Ctrl+S bị tắt khi đang mở hộp thoại.
+- **D77. Triển khai bằng một file compose riêng.** `deploy/docker-compose.prod.yml` chạy đủ bộ
+  (PostgreSQL, migrate, server, Caddy); `deploy/docker-compose.yml` giữ nguyên chỉ có database cho
+  máy dev. Một `deploy/Dockerfile` hai đích: `server` (chạy bằng user `node`, hệ thống file chỉ đọc,
+  bỏ mọi capability) và `web` (build Vite rồi đóng vào Caddy). Migration chạy một lần bằng service
+  `migrate`; server chỉ lên khi migrate thành công. Bí mật lấy từ `deploy/.env`, thiếu là compose
+  dừng ngay chứ không chạy với giá trị mặc định. API trả `Cache-Control: no-store`.
+- **D78. HSTS điều khiển bằng `HSTS_MAX_AGE`.** HSTS gắn theo tên máy, không theo cổng: bật 1 năm
+  cho `localhost` sẽ bắt trình duyệt dùng HTTPS cho cả `http://localhost:5173` của `pnpm dev:web`.
+  Demo `localhost` để 0; tên miền thật đặt 31536000. Caddy ghi đè HSTS của helmet nên chỉ có một nguồn.
+- **D79. Chỉ Caddy có đường ra Internet.** Ba mạng Docker: `backend` (db, server) và `proxy`
+  (server, Caddy) đều `internal`, `edge` chỉ có Caddy. Server không mở cổng ra máy host, nên
+  `TRUST_PROXY=true` an toàn: Caddy ghi đè `X-Forwarded-For` bằng IP thật. Đã kiểm chứng: khai IP giả
+  không né được rate limit, và rate limit tính riêng cho từng IP chứ không gộp mọi người thành IP
+  của Caddy.
+- **D80. Quản lý phiên: xem, đăng xuất từ xa, lịch sử đăng nhập.** `id` phiên trả cho client chính là
+  SHA-256 của token (khóa chính của bảng `Session`), không cần cột mới: token có 256 bit ngẫu nhiên nên
+  không tính ngược được, và server chỉ nhận token gốc để xác thực. Đăng xuất từ xa phải nhập lại mật
+  khẩu (ASVS 7.5.2, cùng lý do với D25) và dùng `POST /sessions/revoke` có body chứa `authKey` thay cho
+  `DELETE /sessions/:id` như bản thiết kế đầu: body của `DELETE` dễ bị proxy bỏ, và gộp một route thì
+  mọi lần thử mật khẩu chịu chung một rate limit. Không hủy phiên hiện tại qua route này (đã có
+  logout). Lịch sử chỉ gồm lần thử vào tài khoản mình; giao diện cảnh báo khi có lần sai mật khẩu.
+- **D81. Giới hạn theo tài khoản (ASVS 6.3.1).** Đếm lần nhập sai mật khẩu theo EMAIL trong
+  `LoginHistory` (cả đăng nhập lẫn nhập lại mật khẩu, cột `kind` mới), kể từ lần đúng gần nhất trong
+  một giờ gần đây. Quá `ACCOUNT_THROTTLE.FREE_FAILURES` lần thì phải chờ 1 phút, gấp đôi mỗi lần sai
+  thêm, tối đa 15 phút; trả `429` kèm `Retry-After`. Kiểm tra TRƯỚC khi so mật khẩu. Ba lựa chọn có chủ
+  đích: (1) chờ chứ không khóa hẳn, vì khóa hẳn thì ai cũng khóa được tài khoản người khác; (2) email
+  chưa đăng ký bị giới hạn y hệt, nếu không thì bị chặn hay không lại lộ email nào đã đăng ký (D15);
+  (3) lần thử trong lúc bị chặn không được ghi, nên gửi dồn dập không kéo dài thời gian chờ của chủ
+  tài khoản. Giới hạn: kẻ tấn công vẫn làm chủ tài khoản phải chờ tới 15 phút mỗi lần (khóa mềm).
+- **D82. Ghi log sự kiện bảo mật, và che email trong log request.** Mọi lần từ chối ghi một dòng `warn`
+  `event: "access_denied"` (ASVS 16.3.2). Khi viết test cho phần này phát hiện log request mặc định của
+  Fastify ghi URL nguyên văn, tức là email trong `/api/users/:email/salt` và `/keys` đã lọt vào log. Giờ
+  log request dùng `loggableUrl()`: thay email bằng `:email`, bỏ query string.
+- **D83. Kịch bản kiểm tra giao diện nằm trong repo.** `web/e2e/ui-check.mjs` (lệnh
+  `pnpm --filter @secure-notes/web ui-check`) điều khiển Chrome thật qua DevTools Protocol, không cần
+  thư viện mới; `web/e2e/other-device.mjs` đóng vai thiết bị thứ hai bằng client-sdk thật. Ảnh chụp ghi
+  vào `web/e2e/shots/` (git bỏ qua). Script tạo tài khoản thử nên chỉ chạy vào máy chủ dev hoặc bản demo.
+- **D84. Test component React bằng Testing Library + happy-dom.** Nhóm đồng ý thêm ba gói, chỉ ở
+  devDependencies của `web/` (không vào bản build): `@testing-library/react`, `@testing-library/dom`
+  (peer dependency bắt buộc của gói trên) và `happy-dom`; `pnpm audit` sạch. Chỉ
+  `web/test/components.test.jsx` chạy trong happy-dom (chú thích `@vitest-environment` đầu file), test
+  logic thuần vẫn chạy trong Node. `client` được thay bằng bản giả để dựng các tình huống khó tạo tay:
+  chia sẻ khi chưa xác nhận mã, SDK phát hiện khóa bị tráo, xung đột phiên bản, người khác lưu xen giữa
+  lúc thu hồi (D76), sai mật khẩu khi đăng xuất từ xa. Luồng đầy đủ với máy chủ thật vẫn do
+  `web/e2e/ui-check.mjs` kiểm (D83). Thay cho phần "chưa có test component" của D74.
+- **D85. Email không nằm trên URL.** `GET /users/:email/salt` và `/keys` đổi thành `POST /users/salt` và
+  `POST /users/keys` với email trong body (ASVS 14.2.1). URL bị ghi lại ở nhiều nơi ngoài tầm kiểm soát
+  của server (log proxy, lịch sử trình duyệt, log hạ tầng về sau); body thì không. Nhờ vậy `loggableUrl()`
+  (D82) chỉ còn bỏ query string. Hai đường dẫn cũ trả `404`.
+- **D86. Người dùng tự xóa tài khoản.** `POST /account/delete` với `authKey` (nhập lại mật khẩu, chịu
+  giới hạn theo IP và theo tài khoản). Một transaction: xóa lịch sử đăng nhập theo `userId` VÀ theo email
+  (lịch sử chỉ `SetNull` khi xóa user, và lần thử trước khi đăng ký không có `userId`), rồi xóa user;
+  phiên, note, lượt chia sẻ đi theo `onDelete: Cascade`. Client xóa khóa khỏi bộ nhớ và xóa "version đã
+  thấy" của tài khoản khỏi localStorage. Giao diện bắt gõ lại email để tránh bấm nhầm, và nói rõ
+  không ai khôi phục được vì dữ liệu mã hóa đầu cuối.
+- **D87. Không thêm trường phiên bản thuật toán vào ciphertext.** Phiên bản định dạng đã nằm trong nhãn
+  của AD (`secure-notes/note/v1`) và trong nội dung được ký của gói chia sẻ (`secure-notes/share/v1`),
+  nên đã được xác thực. Đổi thuật toán thì dùng nhãn `v2`; client mở theo `v2` rồi thử `v1`. Thêm một
+  trường riêng sẽ đổi định dạng dữ liệu và bắt cả nhóm xóa database dev thêm lần nữa mà không thêm an
+  toàn gì.
+- **D88. Tài liệu hóa vòng đời khóa, và vá các chỗ khóa nằm lại trong bộ nhớ.** `docs/KEY_MANAGEMENT.md`
+  đối chiếu từng khóa với NIST SP 800-57 (ASVS 11.1.1). Rà code để viết tài liệu phát hiện ba chỗ khóa
+  không được xóa khi hết dùng: khóa riêng tạm (ephemeral) khi bọc gói chia sẻ; `authKey` sau đăng ký
+  và đăng nhập; và masterKey cùng các khóa đã mở khi đăng ký hoặc đăng nhập thất bại (sai mật khẩu, khóa
+  bọc bị sửa). Giờ mọi đường thất bại đều `memzero`, có test theo dõi đúng khóa vừa sinh và kiểm tra nó
+  về 0. Chính sách vá thư viện (ASVS 15.1.1) ở `SECURITY.md`. Kịch bản demo ở `docs/DEMO.md`, mọi lệnh
+  SQL trong đó đã chạy thử trên bản triển khai.

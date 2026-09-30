@@ -54,3 +54,14 @@ jobs:
         run: pnpm test
       - name: Kiểm tra lỗ hổng thư viện
         run: pnpm audit --audit-level high
+
+  # Dockerfile hỏng thì biết ngay khi push, không phải tới lúc demo mới phát hiện.
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image server và web (không chạy, không đẩy đi đâu)
+        run: docker compose -f deploy/docker-compose.prod.yml build
+        env:
+          POSTGRES_PASSWORD: chi-de-build
+          SERVER_SECRET: chi-de-build

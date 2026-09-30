@@ -11,6 +11,25 @@ import healthRoutes from './routes/health.js';
 import authRoutes from './routes/auth.js';
 import noteRoutes from './routes/notes.js';
 import shareRoutes from './routes/shares.js';
+import sessionRoutes from './routes/sessions.js';
+
+/**
+ * URL để ghi log: bỏ query string. API không đặt dữ liệu nhạy cảm trên đường dẫn (email nằm trong body,
+ * D85), nhưng query do client tự thêm vào thì không nên vào log.
+ * @param {string} url
+ */
+export function loggableUrl(url) {
+  return url.split('?')[0];
+}
+
+/** Mặc định của Fastify ghi `req.url` nguyên văn; thay bằng bản đã che. */
+const safeLogSerializers = {
+  req: (request) => ({
+    method: request.method,
+    url: loggableUrl(request.url),
+    remoteAddress: request.ip,
+  }),
+};
 
 /**
  * Tạo ứng dụng Fastify. Tách khỏi server.js để test bằng app.inject()
@@ -22,7 +41,10 @@ import shareRoutes from './routes/shares.js';
  */
 export async function buildApp({ config = loadConfig(), logger = false, db } = {}) {
   const app = Fastify({
-    logger,
+    logger: logger && {
+      ...(logger === true ? {} : logger),
+      serializers: safeLogSerializers,
+    },
     trustProxy: config.trustProxy,
     bodyLimit: LIMITS.MAX_REQUEST_BYTES,
     // Mặc định của Fastify là 'error', ghi rõ ra để thể hiện chủ đích:
@@ -60,8 +82,7 @@ export async function buildApp({ config = loadConfig(), logger = false, db } = {
       await api.register(authRoutes);
       await api.register(noteRoutes);
       await api.register(shareRoutes);
-      // Còn thiếu theo docs/API.md: GET /sessions, DELETE /sessions/:id, GET /login-history.
-      // await api.register(sessionRoutes);
+      await api.register(sessionRoutes);
     },
     { prefix: '/api' },
   );

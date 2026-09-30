@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
-import { buildApp } from '../src/app.js';
+import { buildApp, loggableUrl } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
-import { LIMITS } from '@secure-notes/shared';
+import { LIMITS, SESSION } from '@secure-notes/shared';
+import { createFakeDb } from './helpers/fake-db.js';
 
 let app;
 
@@ -97,6 +98,27 @@ describe('server khung', () => {
     expect(res.headers['x-content-type-options']).toBe('nosniff');
     expect(res.headers['content-security-policy']).toContain("frame-ancestors 'none'");
   });
+
+  test('đường dẫn cũ có email trên URL không còn tồn tại (D85)', async () => {
+    for (const url of ['/api/users/a%40b.com/salt', '/api/users/a%40b.com/keys']) {
+      const res = await app.inject({ method: 'GET', url });
+      expect(res.statusCode).toBe(404);
+    }
+  });
+
+  test('phản hồi API không được lưu cache, kể cả phản hồi lỗi (ASVS 14.3.2)', async () => {
+    const ok = await app.inject({ method: 'GET', url: '/api/health' });
+    const notFound = await app.inject({ method: 'GET', url: '/api/khong-co' });
+    const forbidden = await app.inject({
+      method: 'POST',
+      url: '/test/echo',
+      headers: { origin: 'https://evil.example' },
+      payload: { title: 'x' },
+    });
+    for (const res of [ok, notFound, forbidden]) {
+      expect(res.headers['cache-control']).toBe('no-store');
+    }
+  });
 });
 
 describe('ghi log lỗi không mong đợi', () => {
@@ -153,5 +175,92 @@ describe('ghi log lỗi không mong đợi', () => {
     expect(output).toContain('thuoc-tinh-bi-thieu');
     // Response ra ngoài thì không bao giờ lộ message nội bộ.
     expect(res.body).not.toContain('thuoc-tinh-bi-thieu');
+  });
+});
+
+describe('ghi log sự kiện bảo mật (ASVS 16.3.2)', () => {
+  async function loggedApp() {
+    const lines = [];
+    const logged = await buildApp({
+      config: loadConfig({ ALLOWED_ORIGINS: 'http://localhost:5173' }),
+      logger: { level: 'info', stream: { write: (line) => lines.push(line) } },
+      db: createFakeDb(),
+    });
+    await logged.ready();
+    return {
+      app: logged,
+      events: () =>
+        lines.map((line) => JSON.parse(line)).filter((entry) => entry.event === 'access_denied'),
+      output: () => lines.join(''),
+    };
+  }
+
+  test('chưa đăng nhập bị từ chối: ghi mã, method, mẫu route; KHÔNG ghi token trong cookie', async () => {
+    const { app: logged, events, output } = await loggedApp();
+    const token = 'T'.repeat(43);
+
+    await logged.inject({
+      method: 'GET',
+      url: '/api/me',
+      cookies: { [SESSION.COOKIE_NAME]: token },
+    });
+    await logged.close();
+
+    expect(events()).toEqual([
+      expect.objectContaining({
+        code: 'UNAUTHENTICATED',
+        method: 'GET',
+        route: '/api/me',
+        userId: null,
+      }),
+    ]);
+    expect(output()).not.toContain(token);
+  });
+
+  test('email tra cứu nằm trong body nên không vào log, kể cả khi bị từ chối (D85)', async () => {
+    const { app: logged, events, output } = await loggedApp();
+
+    await logged.inject({
+      method: 'POST',
+      url: '/api/users/keys',
+      payload: { email: 'bi-mat@example.com' },
+    });
+    await logged.inject({
+      method: 'POST',
+      url: '/api/users/salt',
+      payload: { email: 'bi-mat@example.com' },
+    });
+    await logged.close();
+
+    expect(events()[0]).toMatchObject({ route: '/api/users/keys', code: 'UNAUTHENTICATED' });
+    expect(output()).not.toContain('bi-mat');
+  });
+
+  test('Origin lạ (CSRF) bị chặn cũng được ghi', async () => {
+    const { app: logged, events } = await loggedApp();
+
+    await logged.inject({
+      method: 'POST',
+      url: '/api/logout',
+      headers: { origin: 'https://evil.example' },
+    });
+    await logged.close();
+
+    expect(events()).toEqual([expect.objectContaining({ code: 'FORBIDDEN', method: 'POST' })]);
+  });
+
+  test('request hợp lệ không sinh sự kiện bảo mật', async () => {
+    const { app: logged, events } = await loggedApp();
+    await logged.inject({ method: 'GET', url: '/api/health' });
+    await logged.close();
+    expect(events()).toEqual([]);
+  });
+});
+
+describe('loggableUrl', () => {
+  test('bỏ query string, giữ nguyên đường dẫn', () => {
+    expect(loggableUrl('/api/users/salt?email=a@b.com')).toBe('/api/users/salt');
+    expect(loggableUrl('/api/notes/123?x=1')).toBe('/api/notes/123');
+    expect(loggableUrl('/api/login')).toBe('/api/login');
   });
 });

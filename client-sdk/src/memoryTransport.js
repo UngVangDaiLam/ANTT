@@ -22,8 +22,12 @@
 
 import { Value } from '@sinclair/typebox/value';
 import {
+  AUTH_ATTEMPT_KINDS,
   ChangePasswordRequest,
+  DeleteAccountRequest,
   KDF_DEFAULTS,
+  LIMITS,
+  LoginHistoryResponse,
   LoginRequest,
   NoteCreateRequest,
   NoteListResponse,
@@ -33,8 +37,11 @@ import {
   NoteWriteResponse,
   RotateRequest,
   RegisterRequest,
+  RevokeSessionsRequest,
+  RevokeSessionsResponse,
   SaltResponse,
   SelfAccountResponse,
+  SessionListResponse,
   ShareCreateRequest,
   ShareCreatedResponse,
   ShareListResponse,
@@ -83,14 +90,41 @@ export function createMemoryServer() {
   const users = new Map(); // email đã chuẩn hóa -> hồ sơ (chỉ chứa dữ liệu đã mã hóa sẵn)
   const notes = new Map(); // id -> hồ sơ note (chỉ chứa ciphertext)
   const shares = new Map(); // id -> gói chia sẻ
+  const sessions = new Map(); // id -> { id, email, createdAt, lastSeenAt, expiresAt }
+  const loginHistory = []; // { id, email, success, kind, createdAt }, chỉ email ĐÃ đăng ký
+
+  function recordAttempt(email, success, kind) {
+    loginHistory.push({
+      id: crypto.randomUUID(),
+      email,
+      success,
+      kind,
+      createdAt: new Date().toISOString(),
+    });
+  }
+
+  /** Id phiên giả: 64 ký tự hex như SHA-256 của token ở server thật. */
+  function newSessionId() {
+    const bytes = crypto.getRandomValues(new Uint8Array(32));
+    return [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('');
+  }
 
   /** Một kết nối = một trình duyệt, có phiên đăng nhập riêng (thay cho cookie). */
   function connect() {
-    let sessionEmail = null;
+    let sessionId = null;
 
+    /**
+     * Như server thật: phiên có thể bị hủy từ nơi khác (đăng xuất từ xa, đổi mật khẩu), nên mỗi lần
+     * gọi đều tra lại trong kho phiên chung chứ không tin biến cục bộ.
+     */
     function requireSession() {
-      if (!sessionEmail) throw new ApiError('UNAUTHENTICATED', 'Chưa đăng nhập.');
-      return sessionEmail;
+      const session = sessions.get(sessionId);
+      if (!session) {
+        sessionId = null;
+        throw new ApiError('UNAUTHENTICATED', 'Chưa đăng nhập.');
+      }
+      session.lastSeenAt = new Date().toISOString();
+      return session.email;
     }
 
     const notFound = () => new ApiError('NOT_FOUND', 'Không tìm thấy.');
@@ -119,17 +153,29 @@ export function createMemoryServer() {
         const body = user
           ? { salt: user.salt, kdfParams: user.kdfParams }
           : { salt: fakeSaltFor(normalized), kdfParams: { ...KDF_DEFAULTS } };
-        return assertSchema(SaltResponse, body, 'GET /api/users/:email/salt');
+        return assertSchema(SaltResponse, body, 'POST /api/users/salt');
       },
 
       async login(payload) {
         checkRequest(LoginRequest, payload, 'POST /api/login');
         const user = users.get(normalizeEmail(payload.email));
+        const success = Boolean(user) && user.authKey === payload.authKey;
+        if (user) recordAttempt(user.email, success, AUTH_ATTEMPT_KINDS.LOGIN);
         // Không phân biệt "email không tồn tại" với "sai mật khẩu".
-        if (!user || user.authKey !== payload.authKey) {
+        if (!success) {
           throw new ApiError('INVALID_CREDENTIALS', 'Email hoặc mật khẩu không đúng.');
         }
-        sessionEmail = user.email;
+        // Đăng nhập luôn cấp phiên mới và bỏ phiên cũ của kết nối này (D44).
+        sessions.delete(sessionId);
+        const now = new Date();
+        sessionId = newSessionId();
+        sessions.set(sessionId, {
+          id: sessionId,
+          email: user.email,
+          createdAt: now.toISOString(),
+          lastSeenAt: now.toISOString(),
+          expiresAt: new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString(),
+        });
         return assertSchema(
           SelfAccountResponse,
           {
@@ -145,13 +191,19 @@ export function createMemoryServer() {
       },
 
       async logout() {
-        sessionEmail = null;
+        sessions.delete(sessionId);
+        sessionId = null;
       },
 
       async changePassword(payload) {
         const email = requireSession();
         checkRequest(ChangePasswordRequest, payload, 'POST /api/change-password');
         const user = users.get(email);
+        recordAttempt(
+          email,
+          user.authKey === payload.oldAuthKey,
+          AUTH_ATTEMPT_KINDS.CHANGE_PASSWORD,
+        );
         if (user.authKey !== payload.oldAuthKey) {
           throw new ApiError('INVALID_CREDENTIALS', 'Mật khẩu cũ không đúng.');
         }
@@ -161,7 +213,90 @@ export function createMemoryServer() {
         user.wrappedVaultKey = payload.wrappedVaultKey;
         user.wrappedX25519PrivateKey = payload.wrappedX25519PrivateKey;
         user.wrappedEd25519PrivateKey = payload.wrappedEd25519PrivateKey;
-        // Server thật còn hủy các phiên khác của người này (D25).
+        // D25: giữ phiên hiện tại, hủy mọi phiên khác của người này.
+        for (const [id, session] of sessions) {
+          if (session.email === email && id !== sessionId) sessions.delete(id);
+        }
+      },
+
+      async deleteAccount(payload) {
+        const email = requireSession();
+        checkRequest(DeleteAccountRequest, payload, 'POST /api/account/delete');
+        if (users.get(email).authKey !== payload.authKey) {
+          recordAttempt(email, false, AUTH_ATTEMPT_KINDS.DELETE_ACCOUNT);
+          throw new ApiError('INVALID_CREDENTIALS', 'Mật khẩu không đúng.');
+        }
+        // Như onDelete: Cascade ở server thật: phiên, note (kèm lượt chia sẻ của note), lượt chia sẻ
+        // gửi đi và nhận về; lịch sử đăng nhập cũng xóa theo.
+        users.delete(email);
+        for (const [id, session] of sessions) if (session.email === email) sessions.delete(id);
+        for (const [id, note] of notes) if (note.ownerEmail === email) notes.delete(id);
+        for (const [id, share] of shares) {
+          const orphan = !notes.has(share.noteId);
+          if (orphan || share.senderEmail === email || share.recipientEmail === email) {
+            shares.delete(id);
+          }
+        }
+        for (let i = loginHistory.length - 1; i >= 0; i--) {
+          if (loginHistory[i].email === email) loginHistory.splice(i, 1);
+        }
+        sessionId = null;
+      },
+
+      async listSessions() {
+        const email = requireSession();
+        const body = [...sessions.values()]
+          .filter((session) => session.email === email)
+          .sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt))
+          .map((session) => ({
+            id: session.id,
+            current: session.id === sessionId,
+            createdAt: session.createdAt,
+            lastSeenAt: session.lastSeenAt,
+            expiresAt: session.expiresAt,
+            ip: null,
+            userAgent: null,
+          }));
+        return assertSchema(SessionListResponse, body, 'GET /api/sessions');
+      },
+
+      async revokeSessions(payload) {
+        const email = requireSession();
+        checkRequest(RevokeSessionsRequest, payload, 'POST /api/sessions/revoke');
+        if (payload.sessionId === sessionId) {
+          throw new ApiError('VALIDATION_ERROR', 'Dùng đăng xuất để kết thúc phiên hiện tại.');
+        }
+        const keyMatches = users.get(email).authKey === payload.authKey;
+        recordAttempt(email, keyMatches, AUTH_ATTEMPT_KINDS.REVOKE_SESSIONS);
+        if (!keyMatches) {
+          throw new ApiError('INVALID_CREDENTIALS', 'Mật khẩu không đúng.');
+        }
+        let revoked = 0;
+        for (const [id, session] of sessions) {
+          if (session.email !== email || id === sessionId) continue;
+          if (payload.sessionId !== undefined && id !== payload.sessionId) continue;
+          sessions.delete(id);
+          revoked += 1;
+        }
+        if (payload.sessionId !== undefined && revoked === 0) throw notFound();
+        return assertSchema(RevokeSessionsResponse, { revoked }, 'POST /api/sessions/revoke');
+      },
+
+      async getLoginHistory() {
+        const email = requireSession();
+        const body = loginHistory
+          .filter((entry) => entry.email === email)
+          .reverse()
+          .slice(0, LIMITS.LOGIN_HISTORY_LIMIT)
+          .map(({ id, success, kind, createdAt }) => ({
+            id,
+            success,
+            kind,
+            createdAt,
+            ip: null,
+            userAgent: null,
+          }));
+        return assertSchema(LoginHistoryResponse, body, 'GET /api/login-history');
       },
 
       async getUserKeys(email) {
@@ -171,7 +306,7 @@ export function createMemoryServer() {
         return assertSchema(
           UserKeysResponse,
           { x25519PublicKey: user.x25519PublicKey, ed25519PublicKey: user.ed25519PublicKey },
-          'GET /api/users/:email/keys',
+          'POST /api/users/keys',
         );
       },
 
