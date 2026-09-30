@@ -515,16 +515,35 @@ describe('sửa, xóa, chia sẻ và thu hồi quyền', () => {
         before.share.sharePackage,
         bob._session.x25519PrivateKey,
         fromBase64(aliceKeys.ed25519PublicKey),
+        id,
       );
       // Khóa cũ đúng là khóa thật: mở được nội dung cũ.
-      expect(await noteCrypto.decryptNote(before.encryptedContent, oldKey)).toBe('Nội dung gốc');
+      expect(
+        await noteCrypto.decryptNote(before.encryptedContent, oldKey, {
+          noteId: id,
+          version: before.version,
+          field: 'content',
+        }),
+      ).toBe('Nội dung gốc');
 
       await alice.revokeAccess(id, ['bob@example.com']);
 
       const after = await carol.transport.getNote(id);
       expect(after.encryptedContent).not.toEqual(before.encryptedContent);
-      await expect(noteCrypto.decryptNote(after.encryptedContent, oldKey)).rejects.toThrow();
-      await expect(noteCrypto.decryptNote(after.encryptedTitle, oldKey)).rejects.toThrow();
+      await expect(
+        noteCrypto.decryptNote(after.encryptedContent, oldKey, {
+          noteId: id,
+          version: after.version,
+          field: 'content',
+        }),
+      ).rejects.toThrow();
+      await expect(
+        noteCrypto.decryptNote(after.encryptedTitle, oldKey, {
+          noteId: id,
+          version: after.version,
+          field: 'title',
+        }),
+      ).rejects.toThrow();
     });
 
     test('email không nằm trong danh sách chia sẻ: báo lỗi và không đổi gì', async () => {

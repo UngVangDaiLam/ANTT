@@ -18,6 +18,18 @@ server chỉ là kho lưu trữ mù.
 | `deploy/`      | Trần Bảo        | Docker Compose, Caddy                                           |
 | `integration/` | Cả nhóm         | Chỉ chứa test: client-sdk thật gọi server thật qua HTTP         |
 
+> **Lưu ý khi pull bản có D65–D76** (thêm AD cho ciphertext, gói chia sẻ gắn với note, giao diện mới):
+> ghi chú mã hóa theo định dạng cũ **không còn giải mã được**. Sau khi pull, mỗi người chạy ở máy mình:
+>
+> ```bash
+> pnpm install                                                   # web/ có thêm vitest
+> docker compose -f deploy/docker-compose.yml up -d
+> pnpm --filter @secure-notes/server exec prisma migrate reset   # XÓA toàn bộ dữ liệu database dev, gõ y
+> ```
+>
+> Rồi đăng ký lại tài khoản. Database test (`securenotes_test`) không bị ảnh hưởng. Không cần xóa
+> dữ liệu trình duyệt: localStorage chỉ nhớ số phiên bản theo id ghi chú, ghi chú mới có id khác.
+
 ## Ranh giới bắt buộc
 
 Kiểm tra tự động bằng `pnpm depcheck` (dependency-cruiser), CI sẽ báo lỗi nếu vi phạm:

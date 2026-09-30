@@ -19,6 +19,7 @@ import { getSodium, kdf, vault, note, sharing, toBase64, fromBase64 } from '@sec
 import { KDF_DEFAULTS, LIMITS, NOTE_VERSION_START, normalizeEmail } from '@secure-notes/shared';
 import { ApiError } from './apiError.js';
 import { assertAcceptablePassword } from './passwordPolicy.js';
+import { createMemoryVersionStore } from './versionStore.js';
 
 // client-sdk KHÔNG tự import libsodium-wrappers-sumo: mọi thao tác mật mã đi
 // qua @secure-notes/crypto để chỉ một chỗ duy nhất trong repo chạm vào thư viện.
@@ -26,6 +27,28 @@ let sodium;
 
 async function ready() {
   sodium = await getSodium();
+}
+
+/**
+ * Chạy một thao tác MỞ dữ liệu từ server (giải mã, gỡ bọc khóa, xác minh chữ ký). Thất bại ở đây
+ * nghĩa là dữ liệu đã bị sửa, bị tráo hoặc không khớp ngữ cảnh — đổi thành INTEGRITY_ERROR để giao
+ * diện xử lý theo `code`, và giữ thông điệp gốc để gỡ lỗi. TypeError (lỗi lập trình, ví dụ thiếu
+ * ngữ cảnh AD) và ApiError có sẵn thì để nguyên.
+ * @template T
+ * @param {() => Promise<T>} operation
+ * @returns {Promise<T>}
+ */
+async function openOrReject(operation) {
+  try {
+    return await operation();
+  } catch (err) {
+    if (err instanceof ApiError || err instanceof TypeError) throw err;
+    throw new ApiError(
+      'INTEGRITY_ERROR',
+      'Không mở được dữ liệu từ máy chủ: dữ liệu đã bị sửa, bị tráo hoặc không khớp. ' +
+        `Ứng dụng từ chối hiển thị để bảo vệ bạn. (${err.message})`,
+    );
+  }
 }
 
 /**
@@ -43,12 +66,17 @@ export class SecureNoteClient {
   /**
    * @param {import('./transportType.js').Transport} transport — ví dụ
    *   createMemoryTransport() hoặc createFetchTransport().
+   * @param {object} [options]
+   * @param {import('./versionStore.js').VersionStore} [options.versionStore] nơi nhớ version
+   *   cao nhất đã thấy của từng note (D20). Mặc định chỉ nhớ trong bộ nhớ; giao diện nên
+   *   truyền createLocalStorageVersionStore() để còn nhớ sau khi tải lại trang.
    */
-  constructor(transport) {
+  constructor(transport, { versionStore = createMemoryVersionStore() } = {}) {
     if (!transport) {
       throw new Error('SecureNoteClient cần một transport (memoryTransport hoặc fetchTransport)');
     }
     this.transport = transport;
+    this._versions = versionStore;
     /** @type {SecureNoteSession | null} */
     this._session = null;
   }
@@ -155,24 +183,43 @@ export class SecureNoteClient {
       authKey: toBase64(authKey),
     });
 
-    const vaultKey = await vault.unwrapVaultKey(account.wrappedVaultKey, masterKey);
-    const x25519PrivateKey = await sharing.unwrapPrivateKey(
-      account.wrappedX25519PrivateKey,
-      masterKey,
+    // authKey đã đúng (server chấp nhận) mà vẫn không mở được khóa bọc thì khóa bọc đã bị sửa.
+    const vaultKey = await openOrReject(() =>
+      vault.unwrapVaultKey(account.wrappedVaultKey, masterKey),
     );
-    const ed25519PrivateKey = await sharing.unwrapPrivateKey(
-      account.wrappedEd25519PrivateKey,
-      masterKey,
+    const x25519PrivateKey = await openOrReject(() =>
+      sharing.unwrapPrivateKey(account.wrappedX25519PrivateKey, masterKey),
     );
+    const ed25519PrivateKey = await openOrReject(() =>
+      sharing.unwrapPrivateKey(account.wrappedEd25519PrivateKey, masterKey),
+    );
+
+    // Khóa công khai của chính mình SUY RA từ khóa riêng, không tin bản server gửi. Server gửi bản
+    // khác thì nó đang phát khóa giả cho người khác dùng để chia sẻ với mình — dừng lại ngay.
+    const x25519PublicKey = sodium.crypto_scalarmult_base(x25519PrivateKey);
+    const ed25519PublicKey = sodium.crypto_sign_ed25519_sk_to_pk(ed25519PrivateKey);
+    if (
+      !sodium.memcmp(x25519PublicKey, fromBase64(account.x25519PublicKey)) ||
+      !sodium.memcmp(ed25519PublicKey, fromBase64(account.ed25519PublicKey))
+    ) {
+      sodium.memzero(masterKey);
+      sodium.memzero(vaultKey);
+      sodium.memzero(x25519PrivateKey);
+      sodium.memzero(ed25519PrivateKey);
+      throw new ApiError(
+        'INTEGRITY_ERROR',
+        'Khóa công khai máy chủ lưu cho tài khoản này không khớp với khóa riêng của bạn.',
+      );
+    }
 
     this._session = {
       email: account.email,
       masterKey,
       vaultKey,
       x25519PrivateKey,
-      x25519PublicKey: fromBase64(account.x25519PublicKey),
+      x25519PublicKey,
       ed25519PrivateKey,
-      ed25519PublicKey: fromBase64(account.ed25519PublicKey),
+      ed25519PublicKey,
     };
 
     return { email: account.email };
@@ -275,16 +322,27 @@ export class SecureNoteClient {
     const id = globalThis.crypto.randomUUID();
     const noteKey = vault.generateVaultKey();
 
+    const version = NOTE_VERSION_START;
     const payload = {
       id,
-      version: NOTE_VERSION_START,
-      encryptedTitle: await note.encryptNote(title, noteKey),
-      encryptedContent: await note.encryptNote(content, noteKey),
+      version,
+      encryptedTitle: await note.encryptNote(title, noteKey, {
+        noteId: id,
+        version,
+        field: 'title',
+      }),
+      encryptedContent: await note.encryptNote(content, noteKey, {
+        noteId: id,
+        version,
+        field: 'content',
+      }),
       wrappedNoteKey: await vault.wrapVaultKey(noteKey, session.vaultKey),
     };
     sodium.memzero(noteKey);
 
-    return this.transport.createNote(payload);
+    const result = await this.transport.createNote(payload);
+    this._seeVersion(id, result.version);
+    return result;
   }
 
   /**
@@ -300,10 +358,22 @@ export class SecureNoteClient {
 
     return Promise.all(
       items.map(async (item) => {
-        const noteKey = await vault.unwrapVaultKey(item.wrappedNoteKey, session.vaultKey);
-        const title = await note.decryptNote(item.encryptedTitle, noteKey);
-        sodium.memzero(noteKey);
-        return { id: item.id, version: item.version, title, updatedAt: item.updatedAt };
+        this._seeVersion(item.id, item.version);
+        const noteKey = await openOrReject(() =>
+          vault.unwrapVaultKey(item.wrappedNoteKey, session.vaultKey),
+        );
+        try {
+          const title = await openOrReject(() =>
+            note.decryptNote(item.encryptedTitle, noteKey, {
+              noteId: item.id,
+              version: item.version,
+              field: 'title',
+            }),
+          );
+          return { id: item.id, version: item.version, title, updatedAt: item.updatedAt };
+        } finally {
+          sodium.memzero(noteKey);
+        }
       }),
     );
   }
@@ -322,29 +392,53 @@ export class SecureNoteClient {
   async readNote(noteId) {
     await ready();
     const session = this._requireSession();
-    const record = await this.transport.getNote(noteId);
+    const record = await this._fetchNote(noteId);
 
     let noteKey;
     let sharedBy = null;
     if (record.wrappedNoteKey) {
-      noteKey = await vault.unwrapVaultKey(record.wrappedNoteKey, session.vaultKey);
+      noteKey = await this._ownedNoteKey(record, session);
     } else if (record.share) {
       const senderKeys = await this.transport.getUserKeys(record.share.senderEmail);
-      noteKey = await sharing.unwrapNoteKeyFromSender(
-        record.share.sharePackage,
-        session.x25519PrivateKey,
-        fromBase64(senderKeys.ed25519PublicKey),
+      noteKey = await openOrReject(() =>
+        sharing.unwrapNoteKeyFromSender(
+          record.share.sharePackage,
+          session.x25519PrivateKey,
+          fromBase64(senderKeys.ed25519PublicKey),
+          noteId,
+        ),
       );
       sharedBy = record.share.senderEmail;
     } else {
       // Server đúng đắn luôn trả một trong hai. Thiếu cả hai là dấu hiệu server
       // lỗi hoặc bị can thiệp — từ chối thay vì đoán.
-      throw new Error('Server không trả về khóa để mở note này, từ chối xử lý tiếp.');
+      throw new ApiError(
+        'INTEGRITY_ERROR',
+        'Server không trả về khóa để mở note này, từ chối xử lý tiếp.',
+      );
     }
 
-    const title = await note.decryptNote(record.encryptedTitle, noteKey);
-    const content = await note.decryptNote(record.encryptedContent, noteKey);
-    sodium.memzero(noteKey);
+    // Ngữ cảnh lấy từ noteId MÀ CLIENT HỎI, không phải id server khai (D19).
+    let title;
+    let content;
+    try {
+      title = await openOrReject(() =>
+        note.decryptNote(record.encryptedTitle, noteKey, {
+          noteId,
+          version: record.version,
+          field: 'title',
+        }),
+      );
+      content = await openOrReject(() =>
+        note.decryptNote(record.encryptedContent, noteKey, {
+          noteId,
+          version: record.version,
+          field: 'content',
+        }),
+      );
+    } finally {
+      sodium.memzero(noteKey);
+    }
 
     return {
       id: record.id,
@@ -360,25 +454,46 @@ export class SecureNoteClient {
    * Chia sẻ một note của mình cho người khác. Chỉ bọc đúng note key của note
    * này cho người nhận, KHÔNG bao giờ đưa Vault Key.
    *
+   * `verifiedFingerprint` là kết quả `getFingerprint()` mà người dùng ĐÃ đối chiếu. Khi có, khóa
+   * dùng để chia sẻ phải đúng là khóa đó: nếu không, máy chủ có thể đưa khóa thật lúc hiển thị mã
+   * rồi tráo khóa giả lúc chia sẻ, và việc đối chiếu thành vô nghĩa (D75). Giao diện luôn nên truyền.
+   *
    * @param {string} noteId
    * @param {string} recipientEmail
+   * @param {{verifiedFingerprint?: {email: string, x25519Fingerprint: string}}} [options]
    * @returns {Promise<{id: string}>}
    */
-  async shareNote(noteId, recipientEmail) {
+  async shareNote(noteId, recipientEmail, { verifiedFingerprint } = {}) {
     await ready();
     const session = this._requireSession();
     const normalizedRecipient = normalizeEmail(recipientEmail);
 
-    const record = await this.transport.getNote(noteId);
-    const noteKey = await this._ownedNoteKey(record, session);
-
     const recipientKeys = await this.transport.getUserKeys(normalizedRecipient);
-    const sharePackage = await sharing.wrapNoteKeyForRecipient(
-      noteKey,
-      fromBase64(recipientKeys.x25519PublicKey),
-      session.ed25519PrivateKey,
-    );
-    sodium.memzero(noteKey);
+    const recipientPublicKey = fromBase64(recipientKeys.x25519PublicKey);
+    if (
+      verifiedFingerprint &&
+      (verifiedFingerprint.email !== normalizedRecipient ||
+        sharing.publicKeyFingerprint(recipientPublicKey) !== verifiedFingerprint.x25519Fingerprint)
+    ) {
+      throw new ApiError(
+        'INTEGRITY_ERROR',
+        'Khóa công khai của người nhận đã thay đổi so với mã bạn vừa đối chiếu, từ chối chia sẻ.',
+      );
+    }
+
+    const record = await this._fetchNote(noteId);
+    const noteKey = await this._ownedNoteKey(record, session);
+    let sharePackage;
+    try {
+      sharePackage = await sharing.wrapNoteKeyForRecipient(
+        noteKey,
+        recipientPublicKey,
+        session.ed25519PrivateKey,
+        noteId,
+      );
+    } finally {
+      sodium.memzero(noteKey);
+    }
 
     return this.transport.shareNote(noteId, {
       recipientEmail: normalizedRecipient,
@@ -408,21 +523,32 @@ export class SecureNoteClient {
     assertPlaintextSize('Nội dung note', content, LIMITS.MAX_NOTE_PLAINTEXT_BYTES);
     assertPlaintextSize('Tiêu đề note', title, LIMITS.MAX_NOTE_TITLE_BYTES);
 
-    const record = await this.transport.getNote(noteId);
+    const record = await this._fetchNote(noteId);
     // Server sẽ từ chối y như vậy; kiểm tra sớm để khỏi mã hóa và gửi đi vô ích.
     if (record.version !== version) {
       throw new ApiError('VERSION_CONFLICT', 'Note đã bị thay đổi ở nơi khác, hãy tải lại.');
     }
     const noteKey = await this._ownedNoteKey(record, session);
 
+    const next = version + 1;
     const payload = {
-      version: version + 1,
-      encryptedTitle: await note.encryptNote(title, noteKey),
-      encryptedContent: await note.encryptNote(content, noteKey),
+      version: next,
+      encryptedTitle: await note.encryptNote(title, noteKey, {
+        noteId,
+        version: next,
+        field: 'title',
+      }),
+      encryptedContent: await note.encryptNote(content, noteKey, {
+        noteId,
+        version: next,
+        field: 'content',
+      }),
     };
     sodium.memzero(noteKey);
 
-    return this.transport.updateNote(noteId, payload);
+    const result = await this.transport.updateNote(noteId, payload);
+    this._seeVersion(noteId, result.version);
+    return result;
   }
 
   /**
@@ -483,13 +609,25 @@ export class SecureNoteClient {
     await ready();
     const session = this._requireSession();
 
-    const record = await this.transport.getNote(noteId);
+    const record = await this._fetchNote(noteId);
     const oldKey = await this._ownedNoteKey(record, session);
     let title;
     let content;
     try {
-      title = await note.decryptNote(record.encryptedTitle, oldKey);
-      content = await note.decryptNote(record.encryptedContent, oldKey);
+      title = await openOrReject(() =>
+        note.decryptNote(record.encryptedTitle, oldKey, {
+          noteId,
+          version: record.version,
+          field: 'title',
+        }),
+      );
+      content = await openOrReject(() =>
+        note.decryptNote(record.encryptedContent, oldKey, {
+          noteId,
+          version: record.version,
+          field: 'content',
+        }),
+      );
     } finally {
       sodium.memzero(oldKey);
     }
@@ -515,21 +653,69 @@ export class SecureNoteClient {
             newKey,
             fromBase64(keys.x25519PublicKey),
             session.ed25519PrivateKey,
+            noteId,
           ),
         });
       }
 
+      const next = record.version + 1;
       const result = await this.transport.rotateNote(noteId, {
-        version: record.version + 1,
-        encryptedTitle: await note.encryptNote(title, newKey),
-        encryptedContent: await note.encryptNote(content, newKey),
+        version: next,
+        encryptedTitle: await note.encryptNote(title, newKey, {
+          noteId,
+          version: next,
+          field: 'title',
+        }),
+        encryptedContent: await note.encryptNote(content, newKey, {
+          noteId,
+          version: next,
+          field: 'content',
+        }),
         wrappedNoteKey: await vault.wrapVaultKey(newKey, session.vaultKey),
         shares,
       });
+      this._seeVersion(noteId, result.version);
       return { ...result, keptRecipients: kept };
     } finally {
       sodium.memzero(newKey);
     }
+  }
+
+  /**
+   * Lấy một note từ server và kiểm tra hai điều trước khi dùng:
+   *  - server trả đúng note được hỏi (id khớp);
+   *  - không phải một bản CŨ hơn bản client đã từng thấy (D20).
+   * Mọi thao tác đọc note đều đi qua đây, kể cả khi chỉ để lấy khóa (chia sẻ, sửa,
+   * thu hồi): một bản cũ có thể mang khóa note cũ trước lần xoay khóa gần nhất.
+   */
+  async _fetchNote(noteId) {
+    const record = await this.transport.getNote(noteId);
+    if (record.id !== noteId) {
+      throw new ApiError(
+        'INTEGRITY_ERROR',
+        'Server trả về note khác với note được hỏi, từ chối xử lý tiếp.',
+      );
+    }
+    this._seeVersion(noteId, record.version);
+    return record;
+  }
+
+  /**
+   * Ghi nhận một version vừa thấy của note. Nếu thấp hơn version cao nhất từng thấy thì
+   * server đang trả bản cũ (rollback): ném ROLLBACK_DETECTED, không dùng dữ liệu đó.
+   * Giới hạn: lần đầu đọc note trên một thiết bị mới thì chưa có gì để so.
+   */
+  _seeVersion(noteId, version) {
+    const scope = this._session.email;
+    const highest = this._versions.get(scope, noteId);
+    if (highest !== undefined && version < highest) {
+      throw new ApiError(
+        'ROLLBACK_DETECTED',
+        `Server trả về phiên bản ${version} của note, cũ hơn phiên bản ${highest} bạn đã thấy. ` +
+          'Có thể server bị lỗi hoặc bị can thiệp.',
+      );
+    }
+    if (highest === undefined || version > highest) this._versions.set(scope, noteId, version);
   }
 
   /**
@@ -540,7 +726,7 @@ export class SecureNoteClient {
     if (!record.wrappedNoteKey) {
       throw new Error('Bạn không phải chủ note này.');
     }
-    return vault.unwrapVaultKey(record.wrappedNoteKey, session.vaultKey);
+    return openOrReject(() => vault.unwrapVaultKey(record.wrappedNoteKey, session.vaultKey));
   }
 
   /**
@@ -552,6 +738,23 @@ export class SecureNoteClient {
   async listSharedWithMe() {
     this._requireSession();
     return this.transport.listSharedWithMe();
+  }
+
+  /**
+   * Mã xác minh (fingerprint) khóa công khai của CHÍNH MÌNH, tính từ khóa trong bộ nhớ (đã suy ra
+   * từ khóa riêng lúc đăng nhập) — không hỏi máy chủ. Nếu hỏi máy chủ, một máy chủ đã tráo khóa của
+   * mình khi đưa cho người khác cũng có thể đưa cho mình đúng khóa giả đó, và hai bên sẽ thấy mã
+   * "khớp nhau". Người nhận đọc mã này cho người gửi đối chiếu với getFingerprint().
+   *
+   * @returns {{email: string, x25519Fingerprint: string, ed25519Fingerprint: string}}
+   */
+  myFingerprint() {
+    const session = this._requireSession();
+    return {
+      email: session.email,
+      x25519Fingerprint: sharing.publicKeyFingerprint(session.x25519PublicKey),
+      ed25519Fingerprint: sharing.publicKeyFingerprint(session.ed25519PublicKey),
+    };
   }
 
   /**
@@ -586,6 +789,9 @@ export class SecureNoteClient {
 function assertPlaintextSize(label, text, maxBytes) {
   const bytes = sodium.from_string(text).length;
   if (bytes > maxBytes) {
-    throw new Error(`${label} ${bytes} byte, vượt giới hạn ${maxBytes} byte.`);
+    throw new ApiError(
+      'PAYLOAD_TOO_LARGE',
+      `${label} ${bytes} byte, vượt giới hạn ${maxBytes} byte.`,
+    );
   }
 }

@@ -238,3 +238,68 @@ nếu đổi ý thì ghi quyết định mới thay thế.
   từ 8 ký tự TRƯỚC rồi mới lấy 3000 cái đầu (lọc sau thì danh sách toàn chuỗi ngắn vốn đã bị chặn), rồi
   sinh `client-sdk/src/commonPasswords.js`. Kích thước khoảng 32 KB. Ứng dụng không gọi mạng để lấy danh
   sách này.
+
+## Ràng buộc mật mã (D19, D20, D23)
+
+- **D65. Associated Data của note gồm nhãn, tên trường, noteId và version** (làm chặt D19). Định dạng:
+  `secure-notes/note/v1|<title|content>|<noteId>|<version>`. Thêm TÊN TRƯỜNG so với D19 vì tiêu đề và
+  nội dung dùng CHUNG một khóa note (D21): không có nó thì server tráo ciphertext tiêu đề với nội dung mà
+  không bị phát hiện. Nhãn `v1` để tách ngữ cảnh và để sau này đổi định dạng vẫn phân biệt được dữ liệu
+  cũ. AD là BẮT BUỘC: `encryptNote`/`decryptNote` thiếu ngữ cảnh thì báo lỗi, không âm thầm mã hóa
+  không ràng buộc. noteId phải là UUID v4 chữ thường và version là số nguyên dương, nên chuỗi AD luôn một
+  nghĩa. Khi đọc, client dùng noteId MÀ NÓ HỎI (không phải id server khai) và kiểm tra id server trả về
+  khớp. **Hệ quả:** ciphertext tạo trước thay đổi này không giải mã được nữa — dữ liệu thử nghiệm cũ
+  trong database dev phải xóa đi.
+- **D66. Gói chia sẻ gắn với noteId ở CẢ chữ ký lẫn AD của phép bọc khóa** (cài đặt D23). Ngữ cảnh
+  `secure-notes/share/v1|<noteId>` được đưa vào phần được ký Ed25519 và làm AD của phép bọc
+  XChaCha20-Poly1305. Người nhận dùng noteId của note ĐANG MỞ. Gói của note A đem gắn sang note B thì
+  chữ ký không hợp lệ, bị từ chối trước khi giải mã.
+- **D67. Chống rollback bằng `versionStore` ở client** (cài đặt D20). SDK nhớ version cao nhất đã thấy
+  của từng note (theo từng người dùng) ở MỌI lần đọc — kể cả khi chỉ đọc để lấy khóa cho sửa, chia sẻ,
+  thu hồi, vì một bản cũ có thể mang khóa note trước lần xoay khóa gần nhất. Gặp bản cũ hơn thì ném
+  `ROLLBACK_DETECTED` và không dùng dữ liệu đó. Mặc định chỉ nhớ trong bộ nhớ; `web/` dùng
+  `createLocalStorageVersionStore()` để còn nhớ sau khi tải lại trang. Chỉ lưu id note và số version
+  (D20: không phải bí mật); dữ liệu đọc từ localStorage không được tin (hỏng hay bị sửa thì coi như
+  trống, chỉ nhận số nguyên dương). **Giới hạn:** lần đầu đọc trên thiết bị mới thì chưa có gì để so; có
+  test ghi lại đúng giới hạn này.
+
+## Giao diện
+
+- **D68. Bảng màu hợp mệnh Thủy, không có tông nào pha xanh lá.** Mọi màu có hue 213°–218° (xanh dương
+  thuần), trừ nút Xóa giữ đỏ `#C62828` theo quy ước an toàn. Nền `#F3F6FA`, panel `#FFFFFF`, viền
+  `#D6DEE8`, thanh bên `#0A1628`→`#13294B`, chữ chính `#0A1628`, chữ phụ `#52627A`, nhấn `#0F4C9E`
+  (rê chuột `#0A3A7A`), gradient `#0F4C9E`→`#2F6FE0`, báo thành công nền `#E8F0FC` chữ `#0F4C9E` kèm ✓,
+  viền focus `#7FA7E8`. Mọi cặp chữ/nền đạt WCAG AA (thấp nhất 4.7:1). Sẽ áp dụng ở mục giao diện.
+- **D69. Giao diện xử lý lỗi theo `code`, không bao giờ hiện thông điệp nội bộ.** Thêm mã chỉ client
+  dùng `INTEGRITY_ERROR`: giải mã thất bại, chữ ký sai, sai định dạng, trả nhầm note đều quy về mã này,
+  để giao diện hiện cảnh báo bảo mật nổi bật (khác hẳn lỗi mạng hay lỗi người dùng). Nội dung quá lớn
+  dùng mã có sẵn `PAYLOAD_TOO_LARGE`. `web/src/lib/errors.js` dịch mã sang lời nhắn tiếng Việt.
+- **D70. Khóa công khai của chính mình suy ra từ khóa riêng, không tin bản máy chủ gửi.** Lúc đăng
+  nhập, SDK tính lại khóa công khai X25519 và Ed25519 từ khóa riêng vừa mở; khác với bản máy chủ trả
+  về thì dừng với `INTEGRITY_ERROR`. `myFingerprint()` tính mã xác minh từ khóa trong bộ nhớ, không hỏi
+  máy chủ: nếu hỏi, một máy chủ đã tráo khóa của mình khi đưa cho người khác cũng có thể đưa cho mình
+  đúng khóa giả đó, và hai bên sẽ thấy mã "khớp nhau".
+- **D71. Tự khóa sau `AUTO_LOCK_MS` không thao tác = đăng xuất.** Xóa khóa khỏi bộ nhớ và hủy phiên ở
+  máy chủ; cảnh báo trước 1 phút rằng thay đổi chưa lưu sẽ mất. Khi tab được mở lại hoặc máy thức dậy,
+  so thẳng với đồng hồ để khóa ngay nếu đã quá hạn (bộ hẹn giờ của trình duyệt có thể bị hoãn). Không tự
+  lưu thay người dùng trước khi khóa: lưu ngầm một bản đang gõ dở có thể ghi đè bản của thiết bị khác.
+- **D72. Giao diện không tải gì từ bên ngoài.** Bỏ Google Fonts (CSP `default-src 'self'` sẽ chặn khi
+  deploy, và mỗi lượt mở trang gửi IP người dùng cho bên thứ ba); dùng font hệ thống. Icon vẽ bằng SVG
+  trong mã, favicon phục vụ từ chính origin.
+- **D73. Kết quả trả về muộn của phiên cũ bị bỏ qua.** Phát hiện khi kiểm thử trên trình duyệt thật:
+  một request của phiên trước trả `401` muộn đã đăng xuất nhầm người dùng MỚI vừa đăng nhập. Dashboard
+  đã đóng thì bỏ qua mọi kết quả; App chỉ kết thúc phiên nếu lỗi thuộc đúng người đang đăng nhập.
+- **D74. Kiểm thử giao diện.** Logic thuần (dịch mã lỗi, bộ đếm tự khóa) có test `vitest` trong `web/test/`.
+  Component React chưa có test tự động trong repo (sẽ cần thư viện mới như Testing Library — chưa thêm
+  khi chưa hỏi nhóm); thay vào đó đã chạy một kịch bản điều khiển Chrome thật qua DevTools Protocol đi
+  hết các luồng (20 bước, khổ máy tính và điện thoại) và xem ảnh chụp từng bước.
+- **D75. Chia sẻ ràng buộc với đúng mã đã đối chiếu.** Trước đây `getFingerprint()` (để người dùng
+  đối chiếu) và `shareNote()` (để bọc khóa) gọi `GET /users/:email/keys` hai lần riêng biệt: máy chủ
+  độc hại có thể đưa khóa thật lần đầu rồi tráo khóa giả lần sau, khiến việc đối chiếu vô nghĩa.
+  Giờ `shareNote(noteId, email, { verifiedFingerprint })` so khóa nhận được với mã đã đối chiếu, khác
+  thì dừng với `INTEGRITY_ERROR` trước khi mở khóa note. Giao diện luôn truyền. Giới hạn còn lại:
+  `revokeAccess` bọc lại khóa mới cho những người GIỮ quyền bằng khóa công khai lấy lại từ máy chủ,
+  không đối chiếu lại (muốn chặn cần lưu khóa đã xác minh — chưa làm).
+- **D76. Thu hồi quyền khi đang sửa dở.** Thu hồi xoay khóa trên bản mới nhất ở máy chủ. Nếu bản đó
+  không phải bản đang mở (thiết bị khác đã lưu xen giữa), giao diện không nhận version mới mà báo xung
+  đột (đang sửa dở) hoặc tải lại (không sửa gì); Ctrl+S bị tắt khi đang mở hộp thoại.

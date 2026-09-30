@@ -115,9 +115,22 @@ describe.each(backends)('vòng đời note [$name]', (backend) => {
       bobsOldPackage,
       bob.client._session.x25519PrivateKey,
       fromBase64(aliceKeys.ed25519PublicKey),
+      id,
     );
-    await expect(noteCrypto.decryptNote(current.encryptedContent, oldKey)).rejects.toThrow();
-    await expect(noteCrypto.decryptNote(current.encryptedTitle, oldKey)).rejects.toThrow();
+    await expect(
+      noteCrypto.decryptNote(current.encryptedContent, oldKey, {
+        noteId: id,
+        version: current.version,
+        field: 'content',
+      }),
+    ).rejects.toThrow();
+    await expect(
+      noteCrypto.decryptNote(current.encryptedTitle, oldKey, {
+        noteId: id,
+        version: current.version,
+        field: 'title',
+      }),
+    ).rejects.toThrow();
   });
 
   test('thu hồi quyền của email không được chia sẻ: báo lỗi, không đổi gì trên server', async () => {

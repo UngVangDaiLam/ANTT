@@ -7,6 +7,20 @@ export const ERROR_CODES = Object.freeze({
   // Chỉ client-sdk dùng: server không thấy mật khẩu nên không bao giờ tự trả mã này. Đặt ở đây để giao
   // diện xử lý mọi lỗi theo cùng một cách, theo `code`.
   WEAK_PASSWORD: { status: 400, message: 'Mật khẩu quá yếu.' },
+  // Chỉ client-sdk dùng (D20): server trả một bản note CŨ hơn bản client đã thấy. Không phải lỗi
+  // của người dùng — là dấu hiệu server lỗi hoặc bị can thiệp.
+  ROLLBACK_DETECTED: {
+    status: 409,
+    message:
+      'Server trả về phiên bản cũ hơn bản bạn đã thấy. Có thể server bị lỗi hoặc bị can thiệp.',
+  },
+  // Chỉ client-sdk dùng: dữ liệu server trả về không mở được hoặc không khớp (giải mã thất bại, chữ ký
+  // sai, sai định dạng, trả nhầm note). Là dấu hiệu server lỗi hoặc bị can thiệp, không phải lỗi người dùng.
+  INTEGRITY_ERROR: {
+    status: 502,
+    message:
+      'Dữ liệu từ máy chủ không hợp lệ hoặc đã bị sửa. Ứng dụng từ chối hiển thị để bảo vệ bạn.',
+  },
   INVALID_CREDENTIALS: { status: 401, message: 'Email hoặc mật khẩu không đúng.' },
   UNAUTHENTICATED: { status: 401, message: 'Bạn chưa đăng nhập hoặc phiên đã hết hạn.' },
   FORBIDDEN: { status: 403, message: 'Bạn không có quyền thực hiện thao tác này.' },

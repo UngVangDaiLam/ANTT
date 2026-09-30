@@ -14,14 +14,22 @@ beforeAll(async () => {
   await sodium.ready;
 });
 
+const NOTE_A = '3f2b8c1e-7a4d-4e6f-9b1a-2c5d8e0f4a6b';
+const NOTE_B = '9c1d2e3f-4a5b-4c6d-8e7f-0a1b2c3d4e5f';
+
 describe('sharing (hybrid X25519 + XChaCha20-Poly1305 + ky so Ed25519)', () => {
   test('A chia se note key cho B (co ky so), B giai ma ra dung key', async () => {
     const alice = await generateSigningKeyPair();
     const bob = await generateKeyPair();
     const noteKey = sodium.randombytes_buf(32);
 
-    const wrapped = await wrapNoteKeyForRecipient(noteKey, bob.publicKey, alice.privateKey);
-    const unwrapped = await unwrapNoteKeyFromSender(wrapped, bob.privateKey, alice.publicKey);
+    const wrapped = await wrapNoteKeyForRecipient(noteKey, bob.publicKey, alice.privateKey, NOTE_A);
+    const unwrapped = await unwrapNoteKeyFromSender(
+      wrapped,
+      bob.privateKey,
+      alice.publicKey,
+      NOTE_A,
+    );
 
     expect(sodium.to_base64(unwrapped)).toBe(sodium.to_base64(noteKey));
   });
@@ -32,9 +40,9 @@ describe('sharing (hybrid X25519 + XChaCha20-Poly1305 + ky so Ed25519)', () => {
     const eve = await generateKeyPair();
     const noteKey = sodium.randombytes_buf(32);
 
-    const wrapped = await wrapNoteKeyForRecipient(noteKey, bob.publicKey, alice.privateKey);
+    const wrapped = await wrapNoteKeyForRecipient(noteKey, bob.publicKey, alice.privateKey, NOTE_A);
     await expect(
-      unwrapNoteKeyFromSender(wrapped, eve.privateKey, alice.publicKey),
+      unwrapNoteKeyFromSender(wrapped, eve.privateKey, alice.publicKey, NOTE_A),
     ).rejects.toBeTruthy();
   });
 
@@ -44,9 +52,9 @@ describe('sharing (hybrid X25519 + XChaCha20-Poly1305 + ky so Ed25519)', () => {
     const bob = await generateKeyPair();
     const noteKey = sodium.randombytes_buf(32);
 
-    const wrapped = await wrapNoteKeyForRecipient(noteKey, bob.publicKey, alice.privateKey);
+    const wrapped = await wrapNoteKeyForRecipient(noteKey, bob.publicKey, alice.privateKey, NOTE_A);
     await expect(
-      unwrapNoteKeyFromSender(wrapped, bob.privateKey, mallory.publicKey),
+      unwrapNoteKeyFromSender(wrapped, bob.privateKey, mallory.publicKey, NOTE_A),
     ).rejects.toThrow('Chu ky khong hop le');
   });
 
@@ -55,11 +63,11 @@ describe('sharing (hybrid X25519 + XChaCha20-Poly1305 + ky so Ed25519)', () => {
     const bob = await generateKeyPair();
     const noteKey = sodium.randombytes_buf(32);
 
-    const wrapped = await wrapNoteKeyForRecipient(noteKey, bob.publicKey, alice.privateKey);
+    const wrapped = await wrapNoteKeyForRecipient(noteKey, bob.publicKey, alice.privateKey, NOTE_A);
     const tampered = { ...wrapped, ciphertext: wrapped.ciphertext.slice(0, -4) + 'AAAA' };
 
     await expect(
-      unwrapNoteKeyFromSender(tampered, bob.privateKey, alice.publicKey),
+      unwrapNoteKeyFromSender(tampered, bob.privateKey, alice.publicKey, NOTE_A),
     ).rejects.toThrow('Chu ky khong hop le');
   });
 
@@ -82,8 +90,18 @@ describe('sharing (hybrid X25519 + XChaCha20-Poly1305 + ky so Ed25519)', () => {
     const bob = await generateKeyPair();
     const noteKey = sodium.randombytes_buf(32);
 
-    const wrapped1 = await wrapNoteKeyForRecipient(noteKey, bob.publicKey, alice.privateKey);
-    const wrapped2 = await wrapNoteKeyForRecipient(noteKey, bob.publicKey, alice.privateKey);
+    const wrapped1 = await wrapNoteKeyForRecipient(
+      noteKey,
+      bob.publicKey,
+      alice.privateKey,
+      NOTE_A,
+    );
+    const wrapped2 = await wrapNoteKeyForRecipient(
+      noteKey,
+      bob.publicKey,
+      alice.privateKey,
+      NOTE_A,
+    );
 
     expect(wrapped1.ephemeralPublicKey).not.toBe(wrapped2.ephemeralPublicKey);
     expect(wrapped1.signature).not.toBe(wrapped2.signature);
@@ -100,5 +118,36 @@ describe('sharing (hybrid X25519 + XChaCha20-Poly1305 + ky so Ed25519)', () => {
     const alice = await generateKeyPair();
     const bob = await generateKeyPair();
     expect(publicKeyFingerprint(alice.publicKey)).not.toBe(publicKeyFingerprint(bob.publicKey));
+  });
+
+  test('goi chia se cua note A dem gan sang note B -> chu ky phai fail, khong giai ma (D23)', async () => {
+    const alice = await generateSigningKeyPair();
+    const bob = await generateKeyPair();
+    const noteKey = sodium.randombytes_buf(32);
+
+    const forA = await wrapNoteKeyForRecipient(noteKey, bob.publicKey, alice.privateKey, NOTE_A);
+
+    await expect(
+      unwrapNoteKeyFromSender(forA, bob.privateKey, alice.publicKey, NOTE_B),
+    ).rejects.toThrow('Chu ky khong hop le');
+    // Dung note thi van mo duoc.
+    const unwrapped = await unwrapNoteKeyFromSender(forA, bob.privateKey, alice.publicKey, NOTE_A);
+    expect(sodium.to_base64(unwrapped)).toBe(sodium.to_base64(noteKey));
+  });
+
+  test('thieu hoac sai dinh dang noteId -> bao loi ngay', async () => {
+    const alice = await generateSigningKeyPair();
+    const bob = await generateKeyPair();
+    const noteKey = sodium.randombytes_buf(32);
+    await expect(wrapNoteKeyForRecipient(noteKey, bob.publicKey, alice.privateKey)).rejects.toThrow(
+      TypeError,
+    );
+    await expect(
+      wrapNoteKeyForRecipient(noteKey, bob.publicKey, alice.privateKey, 'note-1'),
+    ).rejects.toThrow(TypeError);
+    const wrapped = await wrapNoteKeyForRecipient(noteKey, bob.publicKey, alice.privateKey, NOTE_A);
+    await expect(unwrapNoteKeyFromSender(wrapped, bob.privateKey, alice.publicKey)).rejects.toThrow(
+      TypeError,
+    );
   });
 });

@@ -47,12 +47,18 @@ describe.each(backends)('client-sdk ↔ server [$name]', (backend) => {
 
       const wrongPassword = user();
       const unknownEmail = user();
-      const a = wrongPassword.client.login('alice@example.com', 'mat-khau-sai');
-      const b = unknownEmail.client.login('khong-co@example.com', 'mat-khau-dung');
+      // allSettled gắn bộ bắt lỗi cho CẢ HAI ngay lập tức. Nếu chỉ `await expect(a)` trước thì `b`
+      // có thể bị từ chối khi chưa ai bắt, và vitest báo "Unhandled Rejection" tùy tốc độ máy.
+      const [a, b] = await Promise.allSettled([
+        wrongPassword.client.login('alice@example.com', 'mat-khau-sai'),
+        unknownEmail.client.login('khong-co@example.com', 'mat-khau-dung'),
+      ]);
 
-      await expect(a).rejects.toBeInstanceOf(ApiError);
-      await expect(a).rejects.toMatchObject({ code: 'INVALID_CREDENTIALS' });
-      await expect(b).rejects.toMatchObject({ code: 'INVALID_CREDENTIALS' });
+      expect(a.status).toBe('rejected');
+      expect(b.status).toBe('rejected');
+      expect(a.reason).toBeInstanceOf(ApiError);
+      expect(a.reason).toMatchObject({ code: 'INVALID_CREDENTIALS' });
+      expect(b.reason).toMatchObject({ code: 'INVALID_CREDENTIALS' });
       // Email lạ vẫn đi hết luồng: nhận salt giả (D15), chạy Argon2id, rồi mới bị từ chối.
       expect(unknownEmail.browser.sent.map((r) => r.path)).toEqual([
         '/api/users/khong-co%40example.com/salt',
@@ -227,6 +233,68 @@ describe.each(backends)('client-sdk ↔ server [$name]', (backend) => {
   });
 
   describe('client không tin server (server độc hại)', () => {
+    test('D19: server tráo ciphertext tiêu đề với nội dung → bị phát hiện', async () => {
+      const alice = user();
+      await alice.client.register('alice@example.com', 'mk-alice-dai');
+      const { id } = await alice.client.createNote({ title: 'Tiêu đề', content: 'Nội dung' });
+      alice.browser.intercept(async ({ method, path, response }) =>
+        method === 'GET' && path === `/api/notes/${id}`
+          ? tamperJson(response, (body) => ({
+              ...body,
+              encryptedTitle: body.encryptedContent,
+              encryptedContent: body.encryptedTitle,
+            }))
+          : undefined,
+      );
+
+      await expect(alice.client.readNote(id)).rejects.toThrow();
+    });
+
+    test('D19: server trả ciphertext cũ nhưng khai version mới → bị phát hiện', async () => {
+      const alice = user();
+      await alice.client.register('alice@example.com', 'mk-alice-dai');
+      const { id } = await alice.client.createNote({ title: 'T', content: 'Bản cũ' });
+      let v1;
+      alice.browser.intercept(async ({ method, path, response }) => {
+        if (!v1 && method === 'GET' && path === `/api/notes/${id}`) {
+          v1 = await response.clone().json();
+        }
+      });
+      await alice.client.readNote(id);
+      await alice.client.updateNote(id, { title: 'T', content: 'Bản mới', version: 1 });
+
+      alice.browser.intercept(async ({ method, path, response }) =>
+        method === 'GET' && path === `/api/notes/${id}`
+          ? tamperJson(response, (current) => ({ ...v1, version: current.version }))
+          : undefined,
+      );
+
+      await expect(alice.client.readNote(id)).rejects.toThrow();
+    });
+
+    test('D20: đã thấy bản mới, server phát lại trọn vẹn bản cũ → ROLLBACK_DETECTED', async () => {
+      const alice = user();
+      await alice.client.register('alice@example.com', 'mk-alice-dai');
+      const { id } = await alice.client.createNote({ title: 'T', content: 'Bản cũ' });
+      let v1;
+      alice.browser.intercept(async ({ method, path, response }) => {
+        if (!v1 && method === 'GET' && path === `/api/notes/${id}`) {
+          v1 = await response.clone().json();
+        }
+      });
+      await alice.client.readNote(id);
+      await alice.client.updateNote(id, { title: 'T', content: 'Bản mới', version: 1 });
+      expect((await alice.client.readNote(id)).content).toBe('Bản mới');
+
+      alice.browser.intercept(async ({ method, path, response }) =>
+        method === 'GET' && path === `/api/notes/${id}`
+          ? tamperJson(response, () => v1)
+          : undefined,
+      );
+
+      await expect(alice.client.readNote(id)).rejects.toMatchObject({ code: 'ROLLBACK_DETECTED' });
+    });
+
     test('/salt trả tham số Argon2id yếu: client từ chối và KHÔNG gửi authKey đi (D48)', async () => {
       await user().client.register('alice@example.com', 'mk-alice-dai');
       const victim = user();

@@ -10,6 +10,7 @@
  */
 
 import { Value } from '@sinclair/typebox/value';
+import { ApiError } from './apiError.js';
 
 /**
  * @param {import('@sinclair/typebox').TSchema} schema
@@ -23,7 +24,8 @@ export function assertSchema(schema, value, contextLabel) {
   }
   const firstError = Value.Errors(schema, value).First();
   const detail = firstError ? `${firstError.path}: ${firstError.message}` : 'không rõ chi tiết';
-  throw new Error(
+  throw new ApiError(
+    'INTEGRITY_ERROR',
     `Phản hồi từ server không đúng định dạng mong đợi (${contextLabel}) - ${detail}. ` +
       'Đây có thể là dấu hiệu server bị lỗi hoặc bị can thiệp, từ chối xử lý tiếp cho an toàn.',
   );

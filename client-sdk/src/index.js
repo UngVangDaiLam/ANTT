@@ -11,3 +11,8 @@ export { createFetchTransport } from './fetchTransport.js';
 export { createMemoryTransport, createMemoryServer } from './memoryTransport.js';
 export { ApiError } from './apiError.js';
 export { checkPassword } from './passwordPolicy.js';
+export { createLocalStorageVersionStore, createMemoryVersionStore } from './versionStore.js';
+
+// web/ chỉ được import client-sdk (ranh giới kiến trúc), nên các hằng số giao diện cần được export
+// lại từ đây thay vì import thẳng từ shared/.
+export { AUTO_LOCK_MS, PASSWORD_POLICY } from '@secure-notes/shared';
