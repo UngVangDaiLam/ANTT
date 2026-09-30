@@ -864,6 +864,8 @@ input:focus {
   font-size: clamp(28px, 3.2vw, 40px);
   font-weight: 700;
   letter-spacing: -0.01em;
+  /* Chia đều hai dòng, không để "được." đứng lẻ. */
+  text-wrap: balance;
 }
 
 .feature-list {
@@ -894,6 +896,8 @@ input:focus {
 .feature-list span {
   color: var(--text-on-dark-2);
   font-size: 14px;
+  /* Tránh dòng cuối chỉ còn một chữ lẻ loi. */
+  text-wrap: pretty;
 }
 
 .auth-panel {
