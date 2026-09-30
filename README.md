@@ -32,15 +32,19 @@ Kiểm tra tự động bằng `pnpm depcheck` (dependency-cruiser), CI sẽ bá
 
 Yêu cầu: Node.js 24 LTS (tối thiểu 22.13), pnpm 10, Docker (để chạy PostgreSQL).
 
+Muốn xem bản chạy đầy đủ (HTTPS, giống lúc nộp bài) mà không cần cài Node: mục _Triển khai (HTTPS)_ bên dưới
+chỉ cần Docker.
+
 ```bash
 corepack enable            # bật pnpm đúng phiên bản ghi trong package.json
 pnpm install
+pnpm --filter @secure-notes/server db:generate   # sinh Prisma client (bắt buộc trước khi chạy server)
 pnpm check                 # lint + format + ranh giới kiến trúc + test
-pnpm --filter @secure-notes/server db:validate   # kiểm tra schema Prisma
 
 # Chạy server
-docker compose -f deploy/docker-compose.yml up -d
-cp server/.env.example server/.env
+docker compose -f deploy/docker-compose.yml up -d        # PostgreSQL cho máy dev
+cp server/.env.example server/.env                       # Windows PowerShell: Copy-Item
+pnpm --filter @secure-notes/server exec prisma migrate deploy   # tạo bảng trong database
 pnpm dev:server            # http://127.0.0.1:3000/api/health
 
 # Chạy giao diện (cửa sổ khác)

@@ -1,0 +1,4 @@
+# Mọi file chữ luôn là LF khi tải về, trên mọi hệ điều hành: khớp với .editorconfig và Prettier
+# (endOfLine mặc định là lf), và Dockerfile/Caddyfile cần LF để chạy đúng trong container.
+# Không có file này, Git for Windows đổi sang CRLF và `pnpm format:check` báo lỗi hàng loạt.
+* text=auto eol=lf
