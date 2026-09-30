@@ -95,3 +95,46 @@ pnpm --filter @secure-notes/crypto benchmark
 ```
 
 Nên chạy thêm trên một máy yếu hơn và trên trình duyệt di động rồi ghi số liệu vào báo cáo.
+
+## Hướng dẫn Demo Giao diện Web (Mã hóa đầu cuối)
+
+Dự án hỗ trợ 2 chế độ khởi chạy web. Tuỳ vào mục đích (test chức năng mạng hay chỉ thiết kế giao diện), bạn có thể chọn 1 trong 2 cách sau:
+
+### 1. Khởi chạy hệ thống
+
+**Cách A: Chạy kết nối với Server thật (Cần Docker)**
+Dùng cách này khi bạn muốn demo luồng mạng (Network Tab) và kết nối CSDL thực tế.
+Mở 2 cửa sổ Terminal tại thư mục gốc của dự án:
+
+- **Terminal 1:** `pnpm run dev:server` (bật máy chủ API)
+- **Terminal 2:** `pnpm run dev:web` (bật giao diện web)
+
+**Cách B: Chạy độc lập chỉ Giao diện Web (Chế độ giả lập bộ nhớ)**
+Dùng cách này khi máy bạn không có Docker hoặc chỉ muốn test/thiết kế UI nhanh.
+
+1. Mở file `web/src/client.js`.
+2. Đổi `createFetchTransport()` thành `createMemoryTransport()` ở dòng 3.
+   _(Nhớ thêm `createMemoryTransport` vào phần import ở dòng 1)_
+3. Mở Terminal và gõ: `pnpm run dev:web`. Mọi dữ liệu sẽ lưu tạm trong RAM.
+
+_Lưu ý:_ Địa chỉ web `http://localhost:5173` (hoặc 5174) chỉ là địa chỉ cục bộ. Khi khởi động lại máy, bạn cần chạy lại lệnh để vào web.
+
+### 2. Kịch bản Demo 1: Kiểm chứng mã hóa mạng (Network Tab)
+
+_(Chỉ dùng được nếu bạn chạy theo Cách A ở trên)_
+Để chứng minh văn bản gốc không bao giờ truyền đi trên mạng:
+
+1. Truy cập trang web trên trình duyệt.
+2. Bấm **F12** mở Developer Tools, chuyển sang tab **Network** (Mạng) và tích chọn mục _Fetch/XHR_.
+3. Đăng nhập và tạo một ghi chú với tiêu đề: "Bí mật", nội dung: "123456", rồi bấm **Lưu**.
+4. Tại tab Network, click vào dòng request vừa xuất hiện (có tên dạng ID dài hoặc `notes`).
+5. Chuyển sang tab **Payload** (hoặc Request). Bạn sẽ thấy nội dung và tiêu đề đã biến thành các chuỗi mã hóa (`ciphertext`) vô nghĩa. Server hoàn toàn không biết chữ "Bí mật".
+
+### 3. Kịch bản Demo 2: Chia sẻ & Đối chiếu Fingerprint
+
+1. Mở một trình duyệt ẩn danh (Incognito Window), tạo một tài khoản phụ thứ hai (VD: `nguoinhan@example.com`).
+2. Trên trình duyệt chứa tài khoản chính, chọn một ghi chú và bấm **Chia sẻ**.
+3. Nhập email tài khoản phụ và bấm **Tiếp tục**.
+4. Hộp thoại sẽ hiển thị **Mã xác nhận (Fingerprint)**. Đây là cơ chế phòng thủ chéo: hai bên phải gọi điện/nhắn tin đọc mã cho nhau nghe để xác nhận không có tin tặc giả mạo khóa.
+5. Sau khi tích xác nhận đã đối chiếu thủ công, bấm **Xác nhận chia sẻ**.
+6. Trình duyệt tài khoản phụ lúc này sẽ nhận được dữ liệu (nhưng vẫn là chuỗi mã hóa qua mạng), và nó tự dùng khóa bí mật của chính nó để giải mã.

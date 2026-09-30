@@ -1,13 +1,22 @@
-/**
- * [Phan Bảo] Khung trống. Quy tắc:
- * - Mọi thao tác chỉ gọi hàm của @secure-notes/client-sdk.
- * - Hiển thị nội dung note dạng văn bản thuần. KHÔNG dùng dangerouslySetInnerHTML.
- */
+import { useState, useEffect } from 'react';
+import { client } from './client.js';
+import { AuthForm } from './AuthForm.jsx';
+import { Dashboard } from './Dashboard.jsx';
+
 export default function App() {
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+
+  useEffect(() => {
+    setIsLoggedIn(client.isLoggedIn());
+  }, []);
+
   return (
-    <main>
-      <h1>Secure Notes</h1>
-      <p>Giao diện đang được xây dựng.</p>
-    </main>
+    <div className="app-container">
+      {isLoggedIn ? (
+        <Dashboard onLogout={() => setIsLoggedIn(false)} />
+      ) : (
+        <AuthForm onLogin={() => setIsLoggedIn(true)} />
+      )}
+    </div>
   );
 }
