@@ -27,7 +27,10 @@ Mọi lệnh và mọi phản ứng của ứng dụng trong kịch bản này �
    docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env exec db psql -U securenotes -d securenotes
    ```
 
-4. Chọn sẵn email không trùng với lần diễn tập, ví dụ `alice@demo.vn`, `bob@demo.vn`, `mallory@demo.vn`.
+4. Máy chiếu mờ thì bấm nút mặt trời/mặt trăng (góc phải màn hình đăng nhập) để chọn chế độ dễ nhìn
+   hơn. Cửa sổ ẩn danh không nhớ lựa chọn của cửa sổ thường, nên chọn ở cả hai cửa sổ.
+
+5. Chọn sẵn email không trùng với lần diễn tập, ví dụ `alice@demo.vn`, `bob@demo.vn`, `mallory@demo.vn`.
    Các câu SQL dưới đây dùng đúng các email này; đổi email thì sửa theo.
 
 ## Phần 1: Máy chủ không đọc được gì (4 phút)

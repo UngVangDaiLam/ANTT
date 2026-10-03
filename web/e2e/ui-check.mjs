@@ -74,6 +74,25 @@ async function typeLabel(label, text) {
 }
 
 const ctrlS = () => key('s', 'KeyS', 83, 2);
+
+/** Giả lập chế độ sáng/tối của hệ điều hành (D89). */
+const systemScheme = (value) =>
+  send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value }] });
+const currentTheme = () => js(`document.documentElement.dataset.theme`);
+const bgOf = (selector) =>
+  js(`getComputedStyle(document.querySelector(${JSON.stringify(selector)})).backgroundColor`);
+
+async function toggleTheme(to) {
+  const label = to === 'dark' ? 'Chuyển sang chế độ tối' : 'Chuyển sang chế độ sáng';
+  await click(`button[aria-label="${label}"]`);
+  await waitFor(`document.documentElement.dataset.theme === '${to}'`, `chế độ ${to}`);
+}
+
+async function reloadToLogin() {
+  await send('Page.reload');
+  await sleep(300);
+  await waitFor(`!!document.querySelector('#auth-email')`, 'màn hình đăng nhập sau khi tải lại');
+}
 const viewport = (width, height, mobile = false) =>
   send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile });
 
@@ -146,6 +165,30 @@ await step('không tải tài nguyên từ bên ngoài (D72)', async () => {
   );
   if (external.length) throw new Error(external.join(', '));
   await shot('login');
+});
+
+await step('sáng/tối: chưa chọn thì theo hệ điều hành (D89)', async () => {
+  for (const scheme of ['dark', 'light']) {
+    await systemScheme(scheme);
+    await js(`localStorage.removeItem('secure-notes:theme')`);
+    await reloadToLogin();
+    const theme = await currentTheme();
+    if (theme !== scheme) throw new Error(`hệ điều hành ${scheme} mà trang là ${theme}`);
+  }
+});
+
+await step('sáng/tối: nút chuyển đổi cả trang, nhớ sau khi tải lại', async () => {
+  // Chế độ sáng phải sáng hẳn: phần giới thiệu không còn nền navy.
+  const heroNavy = await js(
+    `getComputedStyle(document.querySelector('.auth-hero')).backgroundImage.includes('rgb(10, 22, 40)')`,
+  );
+  if (heroNavy) throw new Error('chế độ sáng mà phần giới thiệu vẫn nền navy');
+  await toggleTheme('dark');
+  if ((await bgOf('body')) !== 'rgb(11, 20, 34)') throw new Error('nền trang chưa tối');
+  await shot('login-dark');
+  await reloadToLogin(); // hệ điều hành vẫn đang sáng: lựa chọn đã lưu phải thắng
+  if ((await currentTheme()) !== 'dark') throw new Error('tải lại thì mất lựa chọn');
+  await toggleTheme('light');
 });
 
 await step('đăng ký: mật khẩu phổ biến bị báo ngay, nút bị khóa', async () => {
@@ -245,6 +288,23 @@ await step('mã xác minh của tôi', async () => {
   await click('.modal-footer .btn-primary', 'Đóng');
 });
 
+await step('sáng/tối trong khung làm việc: thanh bên cùng tông với trang', async () => {
+  if ((await bgOf('.sidebar')) !== 'rgb(255, 255, 255)') {
+    throw new Error('chế độ sáng mà thanh bên vẫn tối');
+  }
+  await toggleTheme('dark');
+  for (const selector of ['.sidebar', '.editor']) {
+    const bg = await bgOf(selector);
+    if (bg !== 'rgb(18, 30, 48)') throw new Error(`${selector} chưa tối: ${bg}`);
+  }
+  await shot('dark-editor');
+  await click('button[aria-label="Mã xác minh của tôi"]');
+  await waitFor(`!!document.querySelector('.fingerprint code')`, 'mã của tôi');
+  await shot('dark-fingerprint');
+  await click('.modal-footer .btn-primary', 'Đóng');
+  await toggleTheme('light');
+});
+
 await step('đổi mật khẩu: báo lỗi ngay trên form', async () => {
   await click('button[aria-label="Đổi mật khẩu"]');
   await waitText('Mật khẩu hiện tại');
@@ -321,6 +381,9 @@ await step('điện thoại: khung làm việc và ngăn kéo', async () => {
   await click('button[aria-label="Mở danh sách ghi chú"]');
   await sleep(400);
   await shot('mobile-drawer');
+  await toggleTheme('dark');
+  await shot('mobile-drawer-dark');
+  await toggleTheme('light');
   await click('button[aria-label="Đóng danh sách"]');
 });
 

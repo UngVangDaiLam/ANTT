@@ -17,6 +17,7 @@ const { ShareDialog } = await import('../src/ShareDialog.jsx');
 const { SessionsDialog } = await import('../src/SessionsDialog.jsx');
 const { NoteEditor } = await import('../src/NoteEditor.jsx');
 const { ChangePasswordDialog } = await import('../src/ChangePasswordDialog.jsx');
+const { ThemeToggle } = await import('../src/components/ThemeToggle.jsx');
 
 const renderUi = (ui) => render(<ToastProvider>{ui}</ToastProvider>);
 const onError = (err) => describeError(err);
@@ -445,5 +446,32 @@ describe('ChangePasswordDialog', () => {
       'mat khau cu bi sai',
       'mot cau mat khau moi du dai',
     );
+  });
+});
+
+describe('ThemeToggle', () => {
+  afterEach(() => {
+    localStorage.clear();
+    delete document.documentElement.dataset.theme;
+  });
+
+  test('bấm thì đổi chế độ cả trang và ghi nhớ lựa chọn', () => {
+    localStorage.setItem('secure-notes:theme', 'light');
+    render(<ThemeToggle />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Chuyển sang chế độ tối' }));
+    expect(document.documentElement.dataset.theme).toBe('dark');
+    expect(localStorage.getItem('secure-notes:theme')).toBe('dark');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Chuyển sang chế độ sáng' }));
+    expect(document.documentElement.dataset.theme).toBe('light');
+    expect(localStorage.getItem('secure-notes:theme')).toBe('light');
+  });
+
+  test('giá trị đã lưu bị sửa thành rác thì không làm hỏng trang', () => {
+    localStorage.setItem('secure-notes:theme', 'tim-hong');
+    render(<ThemeToggle />);
+    expect(screen.getByRole('button', { name: /Chuyển sang chế độ/ })).toBeTruthy();
+    expect(localStorage.getItem('secure-notes:theme')).toBe('tim-hong');
   });
 });

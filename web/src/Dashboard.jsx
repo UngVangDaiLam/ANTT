@@ -5,6 +5,7 @@ import { displayTitle, formatWhen } from './lib/format.js';
 import { Banner, useToast } from './components/Feedback.jsx';
 import { Icon } from './components/Icon.jsx';
 import { ConfirmDialog, Modal } from './components/Modal.jsx';
+import { ThemeToggle } from './components/ThemeToggle.jsx';
 import { NoteEditor } from './NoteEditor.jsx';
 import { ChangePasswordDialog } from './ChangePasswordDialog.jsx';
 import { SessionsDialog } from './SessionsDialog.jsx';
@@ -117,10 +118,11 @@ export function Dashboard({ email, onSignOut, onAccountDeleted }) {
     <div className={`app-shell ${drawerOpen ? 'drawer-open' : ''}`}>
       <aside className="sidebar" aria-label="Điều hướng">
         <div className="sidebar-top">
-          <div className="brand brand-light">
+          <div className="brand">
             <Icon name="drop" size={24} className="brand-mark" />
             <span>Secure Notes</span>
           </div>
+          <ThemeToggle className="sidebar-theme" />
           <button
             type="button"
             className="icon-btn sidebar-close"

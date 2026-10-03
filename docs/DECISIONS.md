@@ -370,3 +370,24 @@ nếu đổi ý thì ghi quyết định mới thay thế.
   bọc bị sửa). Giờ mọi đường thất bại đều `memzero`, có test theo dõi đúng khóa vừa sinh và kiểm tra nó
   về 0. Chính sách vá thư viện (ASVS 15.1.1) ở `SECURITY.md`. Kịch bản demo ở `docs/DEMO.md`, mọi lệnh
   SQL trong đó đã chạy thử trên bản triển khai.
+- **D89. Chế độ sáng/tối, cả trang theo cùng một chế độ.** Trước đây chế độ sáng vẫn có thanh bên,
+  màn hình giới thiệu và thông báo nổi nền navy; giờ chế độ sáng sáng hẳn, chế độ tối tối hẳn (thay phần
+  "thanh bên `#0A1628`→`#13294B`" của D68; tông navy đó chuyển sang chế độ tối). Mọi màu trong
+  `web/src/index.css` là biến; `:root[data-theme='dark']` đổi bộ biến, vẫn trong dải hue 213°–218° của
+  D68 (trừ đỏ). Nền nút có chữ trắng tách thành `--accent-fill`, vì ở chế độ tối màu chữ nhấn
+  (`--accent`) phải sáng lên mới đọc được.
+  - **Chọn chế độ:** chưa chọn thì theo hệ điều hành, kể cả khi hệ điều hành đổi lúc đang mở trang. Nút
+    mặt trời/mặt trăng ở đầu thanh bên (cạnh logo, để chân thanh bên không chật thêm làm email bị cắt) và
+    ở góc màn hình đăng nhập. Lựa chọn lưu trong localStorage, khóa `secure-notes:theme`: chỉ là tùy chọn
+    hiển thị, không phải bí mật, không gắn với tài khoản nên đăng xuất hay xóa tài khoản không xóa. Đọc
+    ra chỉ nhận `light`/`dark`, giá trị khác coi như chưa chọn.
+  - **Không nháy màu sai:** `web/public/theme-init.js` đặt `data-theme` trước khi trang vẽ lần đầu. Là
+    file riêng vì CSP `script-src 'self'` chặn script nội tuyến.
+  - **Độ tương phản:** `web/test/contrast.test.js` đọc biến màu thẳng từ `index.css` và kiểm 19 cặp
+    chữ/nền thực sự xuất hiện trên giao diện, ở cả hai chế độ, đều phải đạt WCAG AA 4.5:1. Thấp nhất:
+    chế độ sáng 5.4:1 (chữ phụ trên nền nhấn nhạt), chế độ tối 5.0:1 (chữ trắng trên nút chính). Test
+    này đã bắt được màu nút chính khi rê chuột ở chế độ tối ban đầu (`#3a78dc`, 4.3:1), đổi thành
+    `#2560c4`.
+  - **Kiểm tra trên Chrome thật:** `web/e2e/ui-check.mjs` có thêm 3 bước (giả lập chế độ của hệ điều
+    hành, bấm nút và tải lại trang, thanh bên cùng tông với trang) và ảnh chụp chế độ tối ở màn hình
+    đăng nhập, khung soạn thảo, hộp thoại mã xác minh, ngăn kéo trên điện thoại. 24/24 bước đạt.

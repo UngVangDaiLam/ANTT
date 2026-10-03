@@ -77,8 +77,8 @@ PostgreSQL thật.
 
 ## Kiểm tra giao diện bằng Chrome thật
 
-Đi hết các luồng chính (đăng ký, ghi chú, chia sẻ, thu hồi, xung đột, thiết bị, khổ điện thoại...) bằng
-Chrome headless, chụp ảnh từng bước vào `web/e2e/shots/`. Cần Chrome đã cài; không cần thư viện thêm.
+Đi hết các luồng chính (đăng ký, ghi chú, chia sẻ, thu hồi, xung đột, thiết bị, chế độ sáng/tối, khổ
+điện thoại...) bằng Chrome headless, chụp ảnh từng bước vào `web/e2e/shots/`. Cần Chrome đã cài; không cần thư viện thêm.
 
 ```bash
 pnpm dev:server             # cửa sổ 1 (cần PostgreSQL đang chạy)
@@ -93,6 +93,15 @@ BASE=https://localhost/ pnpm --filter @secure-notes/web ui-check
 - Chạy lại nhiều lần liền có thể chạm giới hạn đăng nhập theo IP (10 lần / 15 phút). Khởi động lại
   server là hết (giới hạn nằm trong bộ nhớ).
 - Chrome không ở chỗ mặc định thì đặt `CHROME_PATH`.
+- Cổng 3000 bị chương trình khác chiếm thì chạy server ở cổng khác (`PORT=3001`, biến môi trường thắng
+  giá trị trong `server/.env`) và trỏ `proxy` trong `web/vite.config.js` theo, **không commit** thay đổi đó.
+
+## Giao diện
+
+- **Chế độ sáng/tối:** mặc định theo hệ điều hành; nút mặt trời/mặt trăng ở đầu thanh bên và góc màn
+  hình đăng nhập để chọn tay, trình duyệt nhớ lựa chọn (D89).
+- **Màu sắc:** chỉ đổi qua biến ở đầu `web/src/index.css`, cho cả hai chế độ. `pnpm test` kiểm độ tương
+  phản WCAG AA của các cặp chữ/nền chính (`web/test/contrast.test.js`), nên chọn màu quá nhạt là test đỏ.
 
 ## Triển khai (HTTPS)
 

@@ -5,6 +5,7 @@ import { describeError } from './lib/errors.js';
 import { Banner } from './components/Feedback.jsx';
 import { Icon } from './components/Icon.jsx';
 import { PasswordField, PasswordStrength } from './components/PasswordField.jsx';
+import { ThemeToggle } from './components/ThemeToggle.jsx';
 
 const FEATURES = [
   [
@@ -64,7 +65,7 @@ export function AuthForm({ notice, onSignedIn }) {
   return (
     <div className="auth-page">
       <section className="auth-hero" aria-hidden="true">
-        <div className="brand brand-light">
+        <div className="brand">
           <Icon name="drop" size={28} className="brand-mark" />
           <span>Secure Notes</span>
         </div>
@@ -83,6 +84,7 @@ export function AuthForm({ notice, onSignedIn }) {
       </section>
 
       <main className="auth-panel">
+        <ThemeToggle className="auth-theme" />
         <div className="auth-card">
           <div className="brand brand-compact">
             <Icon name="drop" size={24} className="brand-mark" />

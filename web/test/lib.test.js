@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { describeError } from '../src/lib/errors.js';
 import { createIdleTimer } from '../src/lib/idleTimer.js';
 import { describeDevice, formatDateTime } from '../src/lib/format.js';
+import { parseTheme, resolveTheme } from '../src/lib/theme.js';
 
 describe('describeError', () => {
   test('lỗi do dữ liệu từ máy chủ bị can thiệp được đánh dấu là cảnh báo bảo mật', () => {
@@ -178,5 +179,24 @@ describe('formatDateTime', () => {
 
   test('chuỗi thời gian hỏng thì trả rỗng', () => {
     expect(formatDateTime('khong-phai-ngay', now)).toBe('');
+  });
+});
+
+describe('resolveTheme', () => {
+  test('lựa chọn đã lưu thắng chế độ của hệ điều hành', () => {
+    expect(resolveTheme('light', true)).toBe('light');
+    expect(resolveTheme('dark', false)).toBe('dark');
+  });
+
+  test('chưa chọn thì theo hệ điều hành', () => {
+    expect(resolveTheme(null, true)).toBe('dark');
+    expect(resolveTheme(null, false)).toBe('light');
+  });
+
+  test('giá trị rác trong localStorage bị bỏ qua, không đưa vào trang', () => {
+    for (const junk of ['DARK', 'dark;', '"><script>', '', 1, {}, undefined]) {
+      expect(parseTheme(junk)).toBeNull();
+      expect(resolveTheme(junk, false)).toBe('light');
+    }
   });
 });
