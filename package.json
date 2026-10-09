@@ -15,7 +15,11 @@
     "depcheck": "depcruise shared crypto client-sdk server web integration --config .dependency-cruiser.cjs",
     "check": "pnpm lint && pnpm format:check && pnpm depcheck && pnpm test",
     "dev:server": "pnpm --filter @secure-notes/server dev",
-    "dev:web": "pnpm --filter @secure-notes/web dev"
+    "dev:web": "pnpm --filter @secure-notes/web dev",
+    "deploy:env": "node deploy/init-env.js",
+    "deploy:up": "node deploy/init-env.js && docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env up -d --build",
+    "deploy:down": "docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env down",
+    "deploy:logs": "docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env logs -f server"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

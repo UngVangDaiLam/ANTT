@@ -1,5 +1,5 @@
 /**
- * Ranh giới kiến trúc, kiểm tra tự động trong CI (pnpm depcheck).
+ * Ranh giới kiến trúc, kiểm tra bằng `pnpm depcheck` (nằm trong `pnpm check`, chạy trước mỗi lần push).
  * Đây là bằng chứng cho nguyên tắc "máy chủ không tin cậy":
  * server không thể gọi bất kỳ hàm mật mã phía client nào.
  */

@@ -15,7 +15,7 @@ nếu đổi ý thì ghi quyết định mới thay thế.
 - **D06. Schema TypeBox trong `shared/`.** Server dùng làm JSON Schema; client kiểm tra response bằng
   `Value.Check`, không dùng ajv vì ajv sinh code bằng `new Function`, bị CSP chặn.
 - **D07. Frontend React + Vite.** Giao diện và API chạy cùng origin (Vite proxy khi dev, Caddy khi deploy).
-- **D08. Quy trình nhẹ:** ESLint + Prettier, PR nhỏ review chéo, commit `feat/fix/test`, hằng số gom về
+- **D08. Quy trình nhẹ:** ESLint + Prettier, PR nhỏ review chéo (sau đổi thành commit thẳng lên `main`, xem D91), commit `feat/fix/test`, hằng số gom về
   `shared/src/config.js`. Không áp dụng kiến trúc lớn kiểu Clean Architecture.
 - **D09. Chuẩn đối chiếu bảo mật: OWASP ASVS 5.0.0** (17 chương).
 
@@ -170,7 +170,7 @@ nếu đổi ý thì ghi quyết định mới thay thế.
   khẩu chỉ gọi API và đọc response (không soi vào DB), nên chạy nguyên xi trên cả hai. DB giả luôn chạy
   (CI, phát triển); PostgreSQL thật chạy khi đặt `TEST_DATABASE_URL`. Lý do: test với DB giả sơ sài chỉ
   chứng minh route đúng với chính DB giả đó, không chứng minh câu truy vấn Prisma chạy đúng; và chỉ khi
-  cả hai cho kết quả giống nhau thì mới tin được DB giả. Từ D59, CI chạy cả hai backend.
+  cả hai cho kết quả giống nhau thì mới tin được DB giả. Từ D59, CI chạy cả hai backend (CI đã bỏ ở D91; giờ chạy tay theo README).
 - **D55. Lỗi của Prisma chỉ được log tên lớp và mã lỗi, không log message hay stack.** Đã kiểm chứng trên
   Prisma 6.19: `PrismaClientValidationError` in NGUYÊN đối tượng tham số của câu truy vấn vào message
   (và cả stack), tức là ciphertext, khóa đã bọc, `authKeyHash`. Đặt `errorFormat: 'minimal'` KHÔNG che
@@ -195,7 +195,7 @@ nếu đổi ý thì ghi quyết định mới thay thế.
 - **D58. `createFetchTransport(baseUrl, { fetch })` nhận hàm fetch từ ngoài.** Chỉ để test tích hợp chạy
   được trên Node với cookie jar riêng cho từng "trình duyệt". Giao diện không cần truyền: mặc định là
   fetch của trình duyệt. Gọi dạng hàm trần để tránh lỗi "Illegal invocation" trên trình duyệt.
-- **D59. CI chạy test trên PostgreSQL thật.** Workflow có service `postgres:17`, đặt `TEST_DATABASE_URL`,
+- **D59. CI chạy test trên PostgreSQL thật.** _(Đã thay bằng D91: bỏ CI.)_ Workflow có service `postgres:17`, đặt `TEST_DATABASE_URL`,
   sinh Prisma client rồi `prisma migrate deploy` trước `pnpm test`. Bước sinh client là bắt buộc: trong
   monorepo, `pnpm install` không tự tìm thấy `server/prisma/schema.prisma` (đã kiểm chứng: thiếu bước này
   thì test Postgres lỗi `Cannot find module '.prisma/client/default'`). Việc chạy `migrate deploy` trên
@@ -391,3 +391,34 @@ nếu đổi ý thì ghi quyết định mới thay thế.
   - **Kiểm tra trên Chrome thật:** `web/e2e/ui-check.mjs` có thêm 3 bước (giả lập chế độ của hệ điều
     hành, bấm nút và tải lại trang, thanh bên cùng tông với trang) và ảnh chụp chế độ tối ở màn hình
     đăng nhập, khung soạn thảo, hộp thoại mã xác minh, ngăn kéo trên điện thoại. 24/24 bước đạt.
+- **D90. Tách tài khoản PostgreSQL theo quyền tối thiểu (ASVS 13.2.2).** Trước đây server, migration và
+  quản trị dùng chung `securenotes`, mà image `postgres` tạo `POSTGRES_USER` thành **superuser**: server bị
+  chiếm quyền là kẻ tấn công có toàn quyền database, kể cả chạy lệnh hệ điều hành qua
+  `COPY ... TO PROGRAM`. Giờ bản triển khai có ba tài khoản, mỗi bước chỉ cầm đúng tài khoản nó cần:
+  - `securenotes` (superuser): chỉ dịch vụ một lần `db-roles` dùng để tạo role; server không có mật khẩu này.
+  - `securenotes_migrate`: sở hữu schema `public` và mọi bảng, chỉ dịch vụ `migrate` dùng.
+  - `securenotes_app`: server dùng lúc chạy. Không superuser, không sở hữu bảng, `NOINHERIT`; chỉ có quyền
+    ghi trong `TABLE_PRIVILEGES` của `server/scripts/db-roles.js`: SELECT/INSERT/UPDATE/DELETE trên
+    `User`, `Note`, `Share`, `Session`; riêng `LoginHistory` không có UPDATE (lịch sử không sửa được, DELETE
+    giữ lại cho xóa tài khoản D86). Không có TRUNCATE, quyền tạo bảng hay đọc `_prisma_migrations`.
+  - Script chạy lại bao nhiêu lần cũng được, chạy ở mỗi lần `up`, và chuyển luôn quyền sở hữu bảng của bản
+    triển khai cũ. Bảng mới chưa khai báo trong `TABLE_PRIVILEGES` làm bước `grants` thất bại và server
+    không khởi động: thêm bảng là phải quyết định quyền, không có quyền mặc định.
+  - Phân quyền theo bảng, không theo cột: Prisma `upsert` và `@updatedAt` ghi những cột khó liệt kê chính
+    xác, và server bị chiếm quyền vẫn xóa rồi ghi lại được, nên phân quyền theo cột không thêm bao nhiêu.
+  - Kiểm chứng: `server/test/db-roles.test.js` kiểm role app bị chặn DROP, TRUNCATE, ALTER, tạo bảng, tạo
+    role, tự nâng lên superuser, `COPY ... TO PROGRAM`, `pg_read_file`, đọc `pg_authid`. Backend test thứ
+    ba `postgres-app-role` chạy lại toàn bộ test route bằng role app để chứng minh server không thiếu quyền.
+  - Database của máy dev vẫn dùng superuser cho gọn; tách quyền áp dụng cho bản triển khai.
+- **D91. Bỏ GitHub Actions (thay D59 và phần "PR nhỏ review chéo" của D08).** Xóa `.github/` (workflow CI
+  và mẫu pull request). Nhóm commit thẳng lên `main`; trước mỗi lần push chạy tay `pnpm check` và
+  `pnpm audit --audit-level high`, test trên PostgreSQL thật chạy theo mục "Chạy test với PostgreSQL thật" trong
+  README (nhớ `prisma generate` và `prisma migrate deploy` như D59 đã ghi). Các tài liệu từng dẫn CI làm bằng chứng (`SECURITY.md`, `docs/ASVS.md`,
+  `docs/THREAT_MODEL.md`) đã sửa theo; kiểm soát này giờ là quy ước của nhóm, không còn tự động chặn push.
+- **D92. Bật bản triển khai bằng một lệnh: `pnpm deploy:up`.** Đây là đồ án, người chấm và thành viên cần
+  bật lên thử nhanh, nên `deploy/init-env.js` tự tạo `deploy/.env` từ `.env.example` với bí mật ngẫu
+  nhiên (32 byte, base64url để dùng được trong URL kết nối database) rồi mới `docker compose up`. Vẫn
+  giữ D77: compose không có mật khẩu mặc định, mỗi máy có bí mật riêng, không bí mật nào nằm trong git.
+  Script chỉ điền ô còn thiếu hoặc trống, không bao giờ đổi giá trị đã có (đổi `POSTGRES_PASSWORD` sẽ
+  làm hỏng database đã khởi tạo trong volume), và không in bí mật ra màn hình. Thêm `deploy:down`,
+  `deploy:logs`, `deploy:env`.

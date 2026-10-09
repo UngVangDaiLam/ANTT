@@ -1,7 +1,7 @@
 # Hợp đồng API
 
 Thay thế `HANDOFF_FOR_B.md`. **Lâm và Trần Bảo cùng sửa file này**; đổi API thì cập nhật file này và
-schema trong `shared/src/schemas.js` trong cùng một PR.
+schema trong `shared/src/schemas.js` trong cùng một commit.
 
 ## Quy ước chung
 

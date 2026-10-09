@@ -6,13 +6,17 @@
 # Khác với deploy/docker-compose.yml (chỉ có database cho máy dev):
 #   - database KHÔNG mở cổng ra ngoài, chỉ server gọi được qua mạng nội bộ `backend`;
 #   - server cũng không mở cổng, chỉ Caddy gọi được; ra Internet chỉ có Caddy (80, 443);
-#   - mọi bí mật lấy từ deploy/.env, thiếu là dừng ngay chứ không chạy với giá trị mặc định.
+#   - mọi bí mật lấy từ deploy/.env, thiếu là dừng ngay chứ không chạy với giá trị mặc định;
+#   - ba tài khoản database, mỗi bước chỉ cầm đúng tài khoản nó cần (D90): superuser chỉ để tạo role
+#     (db-roles), role migrate sở hữu bảng (migrate), role app chỉ đọc/ghi dữ liệu (server).
 
 name: secure-notes
 
-x-server-env: &server-env
-  NODE_ENV: production
-  DATABASE_URL: postgresql://securenotes:${POSTGRES_PASSWORD:?Đặt POSTGRES_PASSWORD trong deploy/.env}@db:5432/securenotes
+# Tên role cố định ở đây; mật khẩu lấy từ deploy/.env. Mật khẩu nằm trong URL nên phải là ký tự an toàn
+# cho URL (base64url như lệnh tạo trong deploy/.env.example).
+x-db-roles: &db-roles
+  MIGRATE_DB_USER: securenotes_migrate
+  APP_DB_USER: securenotes_app
 
 services:
   db:
@@ -31,27 +35,61 @@ services:
       timeout: 5s
       retries: 10
 
-  # Chạy migration một lần rồi thoát; server chỉ khởi động khi bước này thành công.
-  migrate:
+  # Bước 1 (superuser): tạo/cập nhật role migrate và role app, chuyển quyền sở hữu bảng cho role
+  # migrate. Chạy lại mỗi lần `up`, nên đổi mật khẩu trong deploy/.env là có hiệu lực ngay.
+  db-roles:
     build: &server-build
       context: ..
       dockerfile: deploy/Dockerfile
       target: server
     image: secure-notes-server
-    environment: *server-env
-    command: ['npx', 'prisma', 'migrate', 'deploy']
+    environment:
+      <<: *db-roles
+      NODE_ENV: production
+      DATABASE_URL: postgresql://securenotes:${POSTGRES_PASSWORD:?Đặt POSTGRES_PASSWORD trong deploy/.env}@db:5432/securenotes
+      MIGRATE_DB_PASSWORD: ${MIGRATE_DB_PASSWORD:?Đặt MIGRATE_DB_PASSWORD trong deploy/.env}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Đặt APP_DB_PASSWORD trong deploy/.env}
+    command: ['node', '--disable-proto=throw', 'scripts/db-roles.js', 'roles']
     depends_on:
       db:
         condition: service_healthy
     networks: [backend]
     restart: 'no'
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+
+  # Bước 2 (role migrate): chạy migration rồi cấp lại đúng quyền cho role app. Server chỉ khởi động
+  # khi bước này thành công.
+  migrate:
+    build: *server-build
+    image: secure-notes-server
+    environment:
+      <<: *db-roles
+      NODE_ENV: production
+      DATABASE_URL: postgresql://securenotes_migrate:${MIGRATE_DB_PASSWORD:?Đặt MIGRATE_DB_PASSWORD trong deploy/.env}@db:5432/securenotes
+    command:
+      - sh
+      - -c
+      - npx prisma migrate deploy && node --disable-proto=throw scripts/db-roles.js grants
+    depends_on:
+      db-roles:
+        condition: service_completed_successfully
+    networks: [backend]
+    restart: 'no'
+    # Không read_only: npx và Prisma CLI ghi cache/log vào thư mục home.
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
 
   server:
     build: *server-build
     image: secure-notes-server
     restart: unless-stopped
     environment:
-      <<: *server-env
+      NODE_ENV: production
+      # Role app: không phải superuser, không sở hữu bảng nào. Server bị chiếm quyền cũng không DROP,
+      # TRUNCATE, sửa lịch sử đăng nhập hay chạy lệnh hệ điều hành qua database được.
+      DATABASE_URL: postgresql://securenotes_app:${APP_DB_PASSWORD:?Đặt APP_DB_PASSWORD trong deploy/.env}@db:5432/securenotes
       HOST: 0.0.0.0
       PORT: 3000
       ALLOWED_ORIGINS: https://${SITE_ADDRESS:-localhost}

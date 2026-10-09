@@ -8,6 +8,11 @@ import { createFakeDb } from './fake-db.js';
  *  - `postgres`: PostgreSQL thật qua Prisma, chỉ chạy khi đặt `TEST_DATABASE_URL`. ĐÂY là bản chứng
  *    minh câu truy vấn Prisma trong route chạy đúng, và cũng là thước đo để biết DB giả có trung
  *    thực không: cả hai phải cho kết quả giống nhau trên cùng một bộ test.
+ *  - `postgres-app-role`: như `postgres` nhưng server kết nối bằng role app chỉ có quyền tối thiểu
+ *    (D90), giống bản triển khai.
+ *
+ * `backend.admin(db)` là kết nối để TEST tự sửa dữ liệu (ví dụ lùi thời điểm trong lịch sử đăng
+ * nhập), việc server không bao giờ làm nên role app không có quyền.
  *
  * Chạy với Postgres thật:
  *   docker compose -f deploy/docker-compose.yml up -d
@@ -20,12 +25,17 @@ import { createFakeDb } from './fake-db.js';
 const url = process.env.TEST_DATABASE_URL;
 
 let prisma;
+let appRole;
 
 if (url) {
   // Import lười: chạy test mà không có Postgres thì không cần Prisma client đã được sinh.
   const { PrismaClient } = await import('@prisma/client');
+  const { connectWithRoles } = await import('./db-roles.js');
   prisma = new PrismaClient({ datasourceUrl: url });
-  afterAll(() => prisma.$disconnect());
+  const roles = await connectWithRoles(prisma, url);
+  await roles.migrate.$disconnect();
+  appRole = roles.app;
+  afterAll(() => Promise.all([prisma.$disconnect(), appRole.$disconnect()]));
 }
 
 async function resetPostgres() {
@@ -35,7 +45,7 @@ async function resetPostgres() {
 }
 
 export const backends = [
-  { name: 'fake', create: async () => createFakeDb() },
+  { name: 'fake', create: async () => createFakeDb(), admin: (db) => db },
   ...(url
     ? [
         {
@@ -44,6 +54,18 @@ export const backends = [
             await resetPostgres();
             return prisma;
           },
+          admin: () => prisma,
+        },
+        {
+          // Cùng database nhưng server kết nối bằng role app như bản triển khai (D90): chứng minh
+          // mọi route vẫn chạy với quyền tối thiểu. Xóa bảng vẫn bằng superuser, vì role app không có
+          // quyền TRUNCATE.
+          name: 'postgres-app-role',
+          create: async () => {
+            await resetPostgres();
+            return appRole;
+          },
+          admin: () => prisma,
         },
       ]
     : []),

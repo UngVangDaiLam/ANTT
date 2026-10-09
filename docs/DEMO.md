@@ -11,7 +11,7 @@ Mọi lệnh và mọi phản ứng của ứng dụng trong kịch bản này �
 1. Bật bản triển khai HTTPS (README, mục _Triển khai_):
 
    ```bash
-   docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env up -d --build
+   pnpm deploy:up
    docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env restart server
    ```
 
@@ -132,6 +132,24 @@ WHERE email = 'bob@demo.vn';
   Bob (D70).
 - Nói giới hạn: nếu người dùng tick cho có mà không đối chiếu thật, phòng thủ này vô dụng
   (THREAT_MODEL, giới hạn 7).
+
+**3.4 Chiếm được server thì cũng chỉ có quyền của server (D90).** Các lệnh trên chạy bằng superuser, tức
+là trường hợp xấu nhất: kẻ tấn công nắm cả database. Nếu chỉ chiếm được tiến trình server, kẻ đó chỉ có
+tài khoản `securenotes_app`. Mở terminal khác:
+
+```bash
+docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env exec db psql -U securenotes_app -d securenotes
+```
+
+```sql
+SELECT count(*) FROM "Note";               -- được: server cần đọc ghi chú
+DROP TABLE "Note";                         -- ERROR: must be owner of table Note
+UPDATE "LoginHistory" SET success = true;  -- ERROR: permission denied (lịch sử không sửa được)
+COPY (SELECT 1) TO PROGRAM 'id';           -- ERROR: permission denied (không chạy lệnh hệ điều hành)
+```
+
+Nói: role này vẫn sửa được ghi chú như ở 3.1, và đó là việc của lớp mật mã. Quyền tối thiểu chặn những
+việc mật mã không chặn được: xóa sạch dữ liệu, xóa dấu vết đăng nhập, leo thang lên máy chủ database.
 
 ## Phần 4: Chống đoán mật khẩu và quản lý phiên (2 phút)
 

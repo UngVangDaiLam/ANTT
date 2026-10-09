@@ -20,7 +20,7 @@ server chỉ là kho lưu trữ mù.
 
 ## Ranh giới bắt buộc
 
-Kiểm tra tự động bằng `pnpm depcheck` (dependency-cruiser), CI sẽ báo lỗi nếu vi phạm:
+Kiểm tra tự động bằng `pnpm depcheck` (dependency-cruiser), `pnpm check` sẽ báo lỗi nếu vi phạm:
 
 - `server/` không import `crypto/`, `client-sdk/` hay libsodium.
 - `web/` chỉ import `client-sdk/`.
@@ -70,7 +70,8 @@ pnpm test
 ```
 
 Biến này áp dụng cho cả `server/` lẫn `integration/`: `pnpm test` ở thư mục gốc chạy cả hai trên
-PostgreSQL thật.
+PostgreSQL thật. Test route của server còn chạy thêm một lượt bằng role chỉ có quyền tối thiểu
+(`postgres-app-role`, D90), giống bản triển khai.
 
 **Cảnh báo:** các bảng trong database đó bị xóa sạch trước mỗi test. Không bao giờ trỏ vào database dev
 đang có dữ liệu. Chi tiết ở `server/test/helpers/backends.js` và D54.
@@ -106,24 +107,29 @@ BASE=https://localhost/ pnpm --filter @secure-notes/web ui-check
 ## Triển khai (HTTPS)
 
 Chạy đủ bộ PostgreSQL + server + Caddy bằng Docker. Chỉ Caddy mở cổng (80, 443); database và server
-nằm trong mạng nội bộ, không ra được Internet (D77–D79).
+nằm trong mạng nội bộ, không ra được Internet (D77–D79). Server kết nối database bằng role chỉ có quyền
+đọc/ghi dữ liệu, không phải superuser (D90).
 
 ```bash
-cp deploy/.env.example deploy/.env
-# Điền POSTGRES_PASSWORD và SERVER_SECRET, mỗi giá trị tạo bằng:
-#   node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
-
-docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env up -d --build
+pnpm deploy:up
 ```
+
+Lệnh này tự tạo `deploy/.env` với mật khẩu và bí mật ngẫu nhiên nếu chưa có (`pnpm deploy:env`, D92),
+rồi build và bật toàn bộ. Không cần điền gì bằng tay; không có Node thì chép `deploy/.env.example` thành
+`deploy/.env`, điền bốn ô trống rồi chạy lệnh `docker compose` trong script `deploy:up` của `package.json`.
 
 Rồi mở https://localhost. Chứng chỉ do Caddy tự ký nên trình duyệt sẽ cảnh báo lần đầu; đó là bình
 thường khi demo trên máy.
 
 - **Tên miền thật:** trỏ DNS về máy chủ, mở cổng 80 và 443, rồi trong `deploy/.env` đặt
   `SITE_ADDRESS=ten-mien-cua-ban` và `HSTS_MAX_AGE=31536000`. Caddy tự xin chứng chỉ Let's Encrypt.
-- **Xem log:** `docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env logs -f server`
-- **Dừng:** thay `up -d --build` bằng `down`. Thêm `-v` sẽ **xóa luôn dữ liệu** và chứng chỉ.
+- **Xem log:** `pnpm deploy:logs`
+- **Dừng:** `pnpm deploy:down`. Thêm `-v` vào lệnh `docker compose ... down` sẽ **xóa luôn dữ liệu** và
+  chứng chỉ.
 - Bản triển khai dùng database riêng (volume của project `secure-notes`), không đụng database dev.
+- **Nâng cấp bản triển khai cũ:** chạy `pnpm deploy:up` như trên. Script chỉ thêm mật khẩu còn thiếu
+  (`MIGRATE_DB_PASSWORD`, `APP_DB_PASSWORD`), giữ nguyên giá trị đã có. Dịch vụ `db-roles` tự tạo role và chuyển quyền sở hữu bảng, dữ liệu giữ
+  nguyên.
 - Cổng 80/443 đang bị chương trình khác chiếm (IIS, Skype…) thì phải tắt chương trình đó trước.
 
 ## Quy ước làm việc
@@ -135,7 +141,8 @@ thường khi demo trên máy.
   truy cập, schema, mã hóa) thì báo nhóm trước khi push để người khác liếc qua.
 - Tên nhánh (khi cần tách việc dở dang): `feat/...`, `fix/...`, `chore/...`, `docs/...`.
 - Commit: `feat: ...`, `fix: ...`, `test: ...`, `docs: ...`, `chore: ...`, `refactor: ...`.
-- Chạy `pnpm format` và `pnpm check` trước khi commit/push.
+- Chạy `pnpm format` và `pnpm check` trước khi commit/push; thêm `pnpm audit --audit-level high` trước khi
+  push (không có CI, xem D91 và `SECURITY.md`).
 - Hằng số (tham số Argon2, giới hạn kích thước, thời gian phiên...) chỉ đặt trong `shared/src/config.js`.
 - Đổi API thì cập nhật `docs/API.md` và schema trong `shared/` cùng lúc.
 - Script trong `package.json` phải chạy được trên cả Windows lẫn Linux (không dùng cú pháp riêng của bash).

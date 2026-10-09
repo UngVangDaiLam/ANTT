@@ -23,7 +23,7 @@ describe.each(backends)('giới hạn theo tài khoản, D81 [$name]', (backend)
   }
 
   function pushHistoryOutOfWindow(email) {
-    return db.loginHistory.updateMany({
+    return backend.admin(db).loginHistory.updateMany({
       where: { emailAttempted: email },
       data: { createdAt: new Date(Date.now() - 2 * ACCOUNT_THROTTLE.WINDOW_MS) },
     });
@@ -47,7 +47,7 @@ describe.each(backends)('giới hạn theo tài khoản, D81 [$name]', (backend)
   async function seedFailures(email, count, lastAgoMs = 0) {
     const last = Date.now() - lastAgoMs;
     for (let i = 0; i < count; i++) {
-      await db.loginHistory.create({
+      await backend.admin(db).loginHistory.create({
         data: {
           userId: null,
           emailAttempted: email,
@@ -124,7 +124,7 @@ describe.each(backends)('giới hạn theo tài khoản, D81 [$name]', (backend)
   test('lần đúng gần nhất đặt lại bộ đếm', async () => {
     await seedFailures(alice.email, ACCOUNT_THROTTLE.FREE_FAILURES, 10 * MINUTE);
     // Đăng nhập đúng xảy ra SAU các lần sai (trong beforeEach là trước, nên ghi thêm một lần).
-    await db.loginHistory.create({
+    await backend.admin(db).loginHistory.create({
       data: {
         userId: null,
         emailAttempted: alice.email,

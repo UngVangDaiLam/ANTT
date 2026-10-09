@@ -159,9 +159,10 @@ chỗ kể cả khi TLS bị gỡ và server bị chiếm, nội dung note vẫn
 
 ## V13 Configuration
 
-| Mã yêu cầu | Nội dung tóm tắt                           | Mức đáp ứng | Thực hiện ở đâu (file, test)         | Ghi chú                                                                                                                                                                                     |
-| ---------- | ------------------------------------------ | ----------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 13.4.1     | Không deploy kèm metadata quản lý mã nguồn | Đạt         | `.dockerignore`, `deploy/Dockerfile` | Image không chứa `.git`, `.env`, test hay tài liệu. Caddy chỉ phục vụ `web/dist`; đã thử `/.git/HEAD`, `/.env`, `/server/.env` trên bản triển khai: đều nhận trang giao diện, không lộ file |
+| Mã yêu cầu  | Nội dung tóm tắt                                                      | Mức đáp ứng | Thực hiện ở đâu (file, test)                                                                                                       | Ghi chú                                                                                                                                                                                                                                                        |
+| ----------- | --------------------------------------------------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 13.2.2 (L2) | Thành phần backend kết nối với nhau bằng tài khoản có quyền tối thiểu | Đạt         | `server/scripts/db-roles.js`, `deploy/docker-compose.prod.yml`; test `server/test/db-roles.test.js` và backend `postgres-app-role` | Server kết nối PostgreSQL bằng role app (không superuser, không sở hữu bảng, chỉ SELECT/INSERT/UPDATE/DELETE theo bảng, `LoginHistory` không UPDATE). Migration dùng role riêng; superuser chỉ dùng để tạo role (D90). Cả bộ test route chạy lại bằng role app |
+| 13.4.1      | Không deploy kèm metadata quản lý mã nguồn                            | Đạt         | `.dockerignore`, `deploy/Dockerfile`                                                                                               | Image không chứa `.git`, `.env`, test hay tài liệu. Caddy chỉ phục vụ `web/dist`; đã thử `/.git/HEAD`, `/.env`, `/server/.env` trên bản triển khai: đều nhận trang giao diện, không lộ file                                                                    |
 
 **Ngoài phạm vi L1 nhưng đã làm:** `server/src/config.js` bắt buộc đặt `SERVER_SECRET` khi chạy
 production và từ chối khởi động nếu còn để giá trị mẫu; `.env` nằm trong `.gitignore`.
@@ -184,12 +185,12 @@ production và từ chối khởi động nếu còn để giá trị mẫu; `.e
 
 | Mã yêu cầu | Nội dung tóm tắt                                    | Mức đáp ứng | Thực hiện ở đâu (file, test)                                                  | Ghi chú                                                                                                                                                                                            |
 | ---------- | --------------------------------------------------- | ----------- | ----------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 15.1.1     | Tài liệu định nghĩa thời hạn vá thư viện có lỗ hổng | Đạt         | `SECURITY.md`; `.github/workflows/ci.yml` (`pnpm audit --audit-level high`)   | Critical 2 ngày làm việc, High 1 tuần (CI chặn push), Moderate 2 tuần, Low ở lần cập nhật định kỳ; kèm các kiểm soát chuỗi cung ứng đang áp dụng                                                   |
-| 15.2.1     | Không chứa thành phần quá hạn vá                    | Đạt         | `.github/workflows/ci.yml` — `pnpm audit --audit-level high`; D33             | D33 ép `deepmerge-ts >= 8` để vá GHSA-ggr8-5vv4-36mx trong phụ thuộc gián tiếp của Prisma                                                                                                          |
+| 15.1.1     | Tài liệu định nghĩa thời hạn vá thư viện có lỗ hổng | Đạt         | `SECURITY.md`; `pnpm audit --audit-level high` trước mỗi lần push             | Critical 2 ngày làm việc, High 1 tuần (không push khi còn lỗ hổng), Moderate 2 tuần, Low ở lần cập nhật định kỳ; kèm các kiểm soát chuỗi cung ứng đang áp dụng                                     |
+| 15.2.1     | Không chứa thành phần quá hạn vá                    | Đạt         | `pnpm audit --audit-level high` trước mỗi lần push; D33                       | D33 ép `deepmerge-ts >= 8` để vá GHSA-ggr8-5vv4-36mx trong phụ thuộc gián tiếp của Prisma                                                                                                          |
 | 15.3.1     | Chỉ trả về đúng tập trường cần thiết                | Đạt         | `server/src/routes/auth.js` (`select: { id: true }`); `shared/src/schemas.js` | `NoteListItem` cố tình không có `encryptedContent`; test `shared/test/shared.test.js` kiểm tra điều này Danh sách share chỉ trả tham chiếu; người được chia sẻ không nhận `wrappedNoteKey` của chủ |
 
 **Ngoài phạm vi L1 nhưng là điểm mạnh của kiến trúc:** ranh giới giữa các package được **kiểm tra tự
-động** bằng `.dependency-cruiser.cjs` trong CI — `server/` không thể import `crypto/`, `client-sdk/`
+động** bằng `.dependency-cruiser.cjs` (`pnpm depcheck`, nằm trong `pnpm check`) — `server/` không thể import `crypto/`, `client-sdk/`
 hay libsodium. Đây là bằng chứng máy kiểm được cho giả định "máy chủ không tin cậy", không chỉ là
 lời hứa trong tài liệu.
 
@@ -217,5 +218,5 @@ Không áp dụng: hệ thống không dùng WebRTC.
 Không còn khoảng trống nào được xếp vào nhóm phải xử lý trước khi nộp. Các ô "Một phần" còn lại có
 lý do ghi ngay tại dòng đó (ví dụ HSTS và chứng chỉ công khai cần tên miền thật).
 
-Đã xử lý: 11.1.1 (D88), 15.1.1, 7.4.2 (xóa tài khoản, D86), 14.2.1 (D85), 11.2.2 (D87), 6.3.1 (giới hạn theo tài khoản, D81), 16.3.1, 16.3.2 (D82), 6.2.1, 6.2.4, 6.2.5, 6.2.8 (chính sách mật khẩu, D63), 3.3.1 (cookie `__Host-`), toàn bộ V7.2, 7.4.1, 7.5.2 (quản lý phiên, D80), toàn bộ V8 L1, 6.2.2, 6.2.3, 2.2.2, 2.3.1. CI chạy
-mọi test route và tích hợp trên PostgreSQL thật (D59), nên các ô "Đạt" của V7 và V8 được kiểm lại ở mỗi lần push.
+Đã xử lý: 11.1.1 (D88), 15.1.1, 7.4.2 (xóa tài khoản, D86), 14.2.1 (D85), 11.2.2 (D87), 6.3.1 (giới hạn theo tài khoản, D81), 16.3.1, 16.3.2 (D82), 6.2.1, 6.2.4, 6.2.5, 6.2.8 (chính sách mật khẩu, D63), 3.3.1 (cookie `__Host-`), toàn bộ V7.2, 7.4.1, 7.5.2 (quản lý phiên, D80), toàn bộ V8 L1, 6.2.2, 6.2.3, 2.2.2, 2.3.1. Mọi test
+route và tích hợp chạy được trên PostgreSQL thật (D54, D57), nên các ô "Đạt" của V7 và V8 kiểm lại được bằng `pnpm test`.

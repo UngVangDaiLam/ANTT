@@ -8,7 +8,6 @@
 **/*.log
 **/*.db
 .git
-.github
 .claude
 .vscode
 benchmark
